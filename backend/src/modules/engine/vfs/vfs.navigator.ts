@@ -82,8 +82,17 @@ export async function runBookingFlow(
       await humanDelay(300, 700);
     }
 
-    // Select destination
-    const destCode = opts.destination.toUpperCase() === 'BRAZIL' ? 'BRA' : 'PRT';
+    // Select destination — map UI key to VFS 3-letter code
+    const DEST_CODES: Record<string, string> = {
+      portugal: 'PRT', france: 'FRA', germany: 'DEU', spain: 'ESP',
+      italy: 'ITA', netherlands: 'NLD', belgium: 'BEL', switzerland: 'CHE',
+      sweden: 'SWE', norway: 'NOR', denmark: 'DNK', finland: 'FIN',
+      austria: 'AUT', czechrepublic: 'CZE', poland: 'POL',
+      brazil: 'BRA', usa: 'USA', canada: 'CAN',
+      australia: 'AUS', china: 'CHN', japan: 'JPN', india: 'IND',
+      southafrica: 'ZAF',
+    };
+    const destCode = DEST_CODES[opts.destination.toLowerCase()] ?? opts.destination.toUpperCase();
     if (await page.$(sel.destinationCountryDropdown)) {
       await page.selectOption(sel.destinationCountryDropdown, destCode);
       await humanDelay(300, 700);
@@ -114,7 +123,7 @@ export async function runBookingFlow(
     // ── Manual override window ────────────────────────────────────────────────
     state = 'REVIEW';
     if (opts.manualOverrideWindowMs && opts.manualOverrideWindowMs > 0) {
-      await humanDelay(opts.manualOverrideWindowMs, opts.manualOverrideWindowMs);
+      await humanDelay(0, opts.manualOverrideWindowMs);
     }
 
     // ── Submit ────────────────────────────────────────────────────────────────

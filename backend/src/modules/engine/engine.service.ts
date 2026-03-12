@@ -25,9 +25,15 @@ export async function runBooking(job: BookingJobPayload): Promise<BookingResult>
   // Load profile (fully decrypted)
   const profile = await getProfileForBooking(job.profileId);
 
-  // VFS credentials — stored in profile email; password separate (TODO: add to profile schema)
+  // VFS credentials — email and password stored encrypted on the profile
   const vfsEmail = profile.email;
-  const vfsPassword = process.env[`VFS_PASSWORD_${job.profileId}`] ?? '';
+  const vfsPassword = profile.vfsPassword ?? '';
+  if (!vfsPassword) {
+    logEvent('warn', EventType.BOOKING_ATTEMPT,
+      `No VFS password set for profile ${profile.fullName} — booking will fail at login`,
+      { profileId: job.profileId },
+    );
+  }
 
   logEvent('info', EventType.BOOKING_ATTEMPT, `Starting booking for profile ${profile.fullName}`, {
     profileId: job.profileId,

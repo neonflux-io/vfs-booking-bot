@@ -68,18 +68,43 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
       },
     });
 
-    // Parse VFS response — structure varies; adapt as needed after network capture
     const data = response.data;
-    if (!Array.isArray(data?.slots) && !Array.isArray(data)) return [];
 
-    const raw: Array<{ date: string; time: string }> = Array.isArray(data) ? data : data.slots;
-    return raw.map((s) => ({
-      date: s.date,
-      time: s.time,
-      destination: config.destination,
-      visaType: config.visaType,
-    }));
-  } catch {
+    // VFS can return various shapes — try all known structures
+    let raw: Array<{ date?: string; slotDate?: string; time?: string; slotTime?: string }> = [];
+
+    if (Array.isArray(data)) {
+      raw = data;
+    } else if (Array.isArray(data?.slots)) {
+      raw = data.slots;
+    } else if (Array.isArray(data?.data?.slots)) {
+      raw = data.data.slots;
+    } else if (Array.isArray(data?.data)) {
+      raw = data.data;
+    } else if (Array.isArray(data?.availableSlots)) {
+      raw = data.availableSlots;
+    } else {
+      // Unknown structure — log keys so we can adapt selectors in Settings
+      logEvent('warn', EventType.SLOT_DETECTED,
+        `Unknown VFS response for ${config.destination}. Keys: ${Object.keys(data ?? {}).join(', ')}`,
+        { destination: config.destination },
+      );
+      return [];
+    }
+
+    return raw
+      .map((s) => ({
+        date: s.date ?? s.slotDate ?? '',
+        time: s.time ?? s.slotTime ?? '',
+        destination: config.destination,
+        visaType: config.visaType,
+      }))
+      .filter((s) => s.date && s.time);
+  } catch (err) {
+    logEvent('warn', EventType.BOOKING_FAILED,
+      `Monitor fetch error for ${config.destination}: ${(err as Error).message}`,
+      { destination: config.destination },
+    );
     return [];
   }
 }
@@ -109,13 +134,15 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
       const slots = await fetchAvailableSlots(fullConfig);
       const newSlots = diffSlots(current.lastKnownSlots, slots);
 
-      // Update known slots
-      current.lastKnownSlots = new Set(slots.map(slotKey));
-      current.lastCheckedAt = new Date();
+      // Update state atomically — avoid mutating the shared reference directly
+      setMonitor(id, {
+        ...current,
+        lastKnownSlots: new Set(slots.map(slotKey)),
+        lastCheckedAt: new Date(),
+        slotDetectedCount: current.slotDetectedCount + (newSlots.length > 0 ? newSlots.length : 0),
+      });
 
       if (newSlots.length > 0) {
-        current.slotDetectedCount += newSlots.length;
-
         logEvent('info', EventType.SLOT_DETECTED, `${newSlots.length} new slot(s) detected for ${config.destination}`, {
           destination: config.destination,
         });
@@ -141,8 +168,6 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
           }
         }
       }
-
-      setMonitor(id, current);
     } catch (err) {
       logEvent('error', EventType.BOOKING_FAILED, `Monitor poll error: ${(err as Error).message}`, {
         destination: config.destination,

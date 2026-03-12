@@ -1,5 +1,4 @@
 import * as XLSX from 'xlsx';
-import { z } from 'zod';
 import { createProfile } from './profiles.service';
 import { createProfileSchema } from './profiles.schema';
 
@@ -18,6 +17,7 @@ const EXPECTED_COLUMNS: Record<string, string> = {
   'Nationality': 'nationality',
   'Email': 'email',
   'Phone': 'phone',
+  'VFS Password': 'vfsPassword',
   'Priority': 'priority',
 };
 

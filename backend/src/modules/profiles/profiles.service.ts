@@ -19,7 +19,7 @@ function decryptProfile(raw: { passportNumberEnc: string; dobEnc: string }) {
 }
 
 export async function createProfile(dto: CreateProfileDto) {
-  const { passportNumber, dob, ...rest } = dto;
+  const { passportNumber, dob, vfsPassword, ...rest } = dto;
   const { passportNumberEnc, dobEnc } = encryptProfile({ passportNumber, dob });
 
   return prisma.profile.create({
@@ -29,6 +29,7 @@ export async function createProfile(dto: CreateProfileDto) {
       priority: dto.priority as Priority,
       passportNumberEnc,
       dobEnc,
+      ...(vfsPassword ? { vfsPasswordEnc: encrypt(vfsPassword) } : {}),
     },
   });
 }
@@ -105,6 +106,10 @@ export async function updateProfile(id: string, dto: UpdateProfileDto) {
   if (dto.passportExpiry) {
     updates.passportExpiry = new Date(dto.passportExpiry);
   }
+  if (dto.vfsPassword) {
+    updates.vfsPasswordEnc = encrypt(dto.vfsPassword);
+    delete updates.vfsPassword;
+  }
 
   return prisma.profile.update({ where: { id }, data: updates });
 }
@@ -124,5 +129,6 @@ export async function getProfileForBooking(id: string) {
     ...profile,
     passportNumber: decrypt(profile.passportNumberEnc),
     dob: decrypt(profile.dobEnc),
+    vfsPassword: profile.vfsPasswordEnc ? decrypt(profile.vfsPasswordEnc) : '',
   };
 }

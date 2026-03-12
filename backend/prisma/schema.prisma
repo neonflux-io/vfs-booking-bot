@@ -76,6 +76,7 @@ model Profile {
   nationality        String
   email              String
   phone              String
+  vfsPasswordEnc     String?   // AES-256-GCM encrypted VFS portal login password
   priority           Priority  @default(NORMAL)
   isActive           Boolean   @default(true)
   bookings           Booking[]

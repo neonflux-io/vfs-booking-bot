@@ -8,6 +8,7 @@ export const createProfileSchema = z.object({
   nationality: z.string().min(2),
   email: z.string().email(),
   phone: z.string().min(7),
+  vfsPassword: z.string().min(1).optional(),
   priority: z.enum(['HIGH', 'NORMAL']).default('NORMAL'),
 });
 
