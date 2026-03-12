@@ -12,9 +12,41 @@ import { AppError } from '@middleware/errorHandler';
 // NOTE: This URL/params may change — update via vfs.selectors Settings if needed
 const VFS_AVAILABILITY_URL = 'https://visa.vfsglobal.com/ago/{destination}/en/schedule-appointment/get-slots';
 
+// Maps UI destination keys → VFS 3-letter country codes used in the URL
+const DESTINATION_CODES: Record<string, string> = {
+  // Europe
+  portugal:       'prt',
+  france:         'fra',
+  germany:        'deu',
+  spain:          'esp',
+  italy:          'ita',
+  netherlands:    'nld',
+  belgium:        'bel',
+  switzerland:    'che',
+  sweden:         'swe',
+  norway:         'nor',
+  denmark:        'dnk',
+  finland:        'fin',
+  austria:        'aut',
+  czechrepublic:  'cze',
+  poland:         'pol',
+  // Americas
+  brazil:         'bra',
+  usa:            'usa',
+  canada:         'can',
+  // Asia-Pacific
+  australia:      'aus',
+  china:          'chn',
+  japan:          'jpn',
+  india:          'ind',
+  // Africa
+  southafrica:    'zaf',
+};
+
 function buildAvailabilityUrl(destination: string): string {
-  const dest = destination.toLowerCase() === 'brazil' ? 'bra' : 'prt';
-  return VFS_AVAILABILITY_URL.replace('{destination}', dest);
+  const code = DESTINATION_CODES[destination.toLowerCase().replace(/\s+/g, '')];
+  if (!code) throw new Error(`Unsupported destination: ${destination}`);
+  return VFS_AVAILABILITY_URL.replace('{destination}', code);
 }
 
 function slotKey(slot: SlotInfo): string {

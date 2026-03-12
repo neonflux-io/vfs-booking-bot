@@ -48,6 +48,9 @@ export async function bulkImportProfiles(fileBuffer: Buffer): Promise<ImportResu
       const val = raw[col];
       if (field === 'dob' || field === 'passportExpiry') {
         mapped[field] = normalizeDate(val);
+      } else if (field === 'priority') {
+        const p = val ? String(val).trim().toUpperCase() : '';
+        mapped[field] = p === 'HIGH' ? 'HIGH' : 'NORMAL';
       } else {
         mapped[field] = val ? String(val).trim() : '';
       }

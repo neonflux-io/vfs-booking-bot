@@ -8,7 +8,7 @@ export default function SetupPage() {
   const qc = useQueryClient();
   const { setMonitors } = useMonitorStore();
 
-  const [destination, setDestination] = useState<'brazil' | 'portugal'>('brazil');
+  const [destination, setDestination] = useState('brazil');
   const [visaType, setVisaType] = useState('tourist');
   const [intervalMs, setIntervalMs] = useState(10000);
   const [mode, setMode] = useState<'auto' | 'manual'>('auto');
@@ -28,7 +28,7 @@ export default function SetupPage() {
 
   const startMutation = useMutation({
     mutationFn: () => api.post('/monitor/start', { destination, visaType, intervalMs, profileIds: selectedProfileIds, mode }),
-    onSuccess: () => { refetchStatus(); qc.invalidateQueries({ queryKey: ['monitor-status'] }); },
+    onSuccess: () => { setSelectedProfileIds([]); refetchStatus(); qc.invalidateQueries({ queryKey: ['monitor-status'] }); },
   });
 
   const stopMutation = useMutation({
@@ -73,9 +73,38 @@ export default function SetupPage() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="label">Destination</label>
-            <select className="input" value={destination} onChange={(e) => setDestination(e.target.value as 'brazil' | 'portugal')}>
-              <option value="brazil">Brazil</option>
-              <option value="portugal">Portugal</option>
+            <select className="input" value={destination} onChange={(e) => setDestination(e.target.value)}>
+              <optgroup label="Europe">
+                <option value="portugal">Portugal</option>
+                <option value="france">France</option>
+                <option value="germany">Germany</option>
+                <option value="spain">Spain</option>
+                <option value="italy">Italy</option>
+                <option value="netherlands">Netherlands</option>
+                <option value="belgium">Belgium</option>
+                <option value="switzerland">Switzerland</option>
+                <option value="sweden">Sweden</option>
+                <option value="norway">Norway</option>
+                <option value="denmark">Denmark</option>
+                <option value="finland">Finland</option>
+                <option value="austria">Austria</option>
+                <option value="czechrepublic">Czech Republic</option>
+                <option value="poland">Poland</option>
+              </optgroup>
+              <optgroup label="Americas">
+                <option value="brazil">Brazil</option>
+                <option value="usa">United States</option>
+                <option value="canada">Canada</option>
+              </optgroup>
+              <optgroup label="Asia-Pacific">
+                <option value="australia">Australia</option>
+                <option value="china">China</option>
+                <option value="japan">Japan</option>
+                <option value="india">India</option>
+              </optgroup>
+              <optgroup label="Africa">
+                <option value="southafrica">South Africa</option>
+              </optgroup>
             </select>
           </div>
 
