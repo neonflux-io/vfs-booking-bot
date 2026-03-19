@@ -175,28 +175,66 @@ async function performLogin(page: Page, email: string, password: string, session
 async function selectSlot(page: Page, slot: SlotInfo) {
   const sel = getSelectors();
 
-  // Click the correct date on the calendar
-  const dateCell = await page.$(`td[data-date="${slot.date}"], ${sel.slotDateCell}`);
-  if (dateCell) {
-    await dateCell.click();
-    await humanDelay(400, 800);
-  }
-
-  // Click the time slot
-  const timeButtons = await page.$$(sel.slotTimeButton);
-  for (const btn of timeButtons) {
-    const text = await btn.textContent();
-    if (text?.includes(slot.time)) {
-      await btn.click();
-      await humanDelay(300, 700);
-      return;
+  // ── Try the exact requested date ──────────────────────────────────────────
+  let dateClicked = false;
+  if (slot.date) {
+    // Try explicit data-date attribute first, then the generic selector
+    const exactCell = await page.$(`td[data-date="${slot.date}"]:not(.disabled):not(.unavailable)`);
+    if (exactCell) {
+      await exactCell.click();
+      await humanDelay(400, 800);
+      dateClicked = true;
     }
   }
 
-  // If specific time not found, click first available
-  if (timeButtons.length > 0) {
-    await timeButtons[0].click();
-    await humanDelay(300, 700);
+  // ── Fallback: first available date on the calendar ────────────────────────
+  if (!dateClicked) {
+    const availableCells = await page.$$(
+      `td[data-date]:not(.disabled):not(.unavailable):not(.past), ${sel.slotDateCell}`
+    );
+    if (availableCells.length > 0) {
+      await availableCells[0].click();
+      await humanDelay(400, 800);
+    }
+  }
+
+  // Wait for time slots to render after date selection
+  await page.waitForTimeout(600);
+
+  // ── Try the exact requested time ──────────────────────────────────────────
+  const timeButtons = await page.$$(sel.slotTimeButton);
+  let timeClicked = false;
+
+  if (slot.time) {
+    for (const btn of timeButtons) {
+      const text = await btn.textContent();
+      const isDisabled = await btn.getAttribute('disabled');
+      if (text?.includes(slot.time) && isDisabled === null) {
+        await btn.click();
+        await humanDelay(300, 700);
+        timeClicked = true;
+        break;
+      }
+    }
+  }
+
+  // ── Fallback: first non-disabled time slot ────────────────────────────────
+  if (!timeClicked) {
+    for (const btn of timeButtons) {
+      const isDisabled = await btn.getAttribute('disabled');
+      const classList = await btn.getAttribute('class') ?? '';
+      const isUnavailable = classList.includes('disabled') || classList.includes('unavailable') || classList.includes('taken');
+      if (isDisabled === null && !isUnavailable) {
+        await btn.click();
+        await humanDelay(300, 700);
+        timeClicked = true;
+        break;
+      }
+    }
+  }
+
+  if (!timeClicked && timeButtons.length === 0) {
+    throw new Error('No available time slots found on page — slot may have been taken');
   }
 }
 

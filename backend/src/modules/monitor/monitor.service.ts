@@ -113,6 +113,44 @@ function diffSlots(prev: Set<string>, current: SlotInfo[]): SlotInfo[] {
   return current.filter((slot) => !prev.has(slotKey(slot)));
 }
 
+// ── Adaptive interval logic ────────────────────────────────────────────────────
+//
+// VFS typically releases appointment slots in short bursts during business hours.
+// We reduce the poll interval when activity is high and relax it during quiet periods
+// to avoid unnecessary requests and reduce IP block risk.
+//
+// Rules (applied in priority order):
+//  1. If slots were just detected → drop to HIGH_DEMAND_MS for the next N polls
+//  2. If current time is within a known high-activity window → use ACTIVE_MS
+//  3. Otherwise → use the user-configured base interval (at least QUIET_MIN_MS)
+
+const HIGH_DEMAND_MS  = 3_000;   // burst mode: slots are appearing right now
+const ACTIVE_MS       = 5_000;   // active window: likely release time
+const QUIET_MIN_MS    = 10_000;  // floor for quiet periods
+
+// High-activity windows in local server time (hour ranges, 24h).
+// VFS Angola appointments typically open around 09:00 and 14:00 WAT.
+const ACTIVE_WINDOWS: Array<{ startHour: number; endHour: number }> = [
+  { startHour: 8,  endHour: 10 },
+  { startHour: 13, endHour: 15 },
+];
+
+function isInActiveWindow(): boolean {
+  const hour = new Date().getHours();
+  return ACTIVE_WINDOWS.some((w) => hour >= w.startHour && hour < w.endHour);
+}
+
+function adaptiveInterval(baseMs: number, consecutiveEmptyPolls: number, justDetected: boolean): number {
+  if (justDetected) return HIGH_DEMAND_MS;
+  if (isInActiveWindow()) return Math.min(baseMs, ACTIVE_MS);
+  // Outside active windows: relax polling but never below QUIET_MIN_MS
+  // Back off slightly when nothing has been seen for a long time
+  const relaxed = consecutiveEmptyPolls > 60 ? baseMs * 2 : baseMs;
+  return Math.max(relaxed, QUIET_MIN_MS);
+}
+
+// ── startMonitor ───────────────────────────────────────────────────────────────
+
 export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
   const id = uuidv4();
   const fullConfig: MonitorConfig = { ...config, id };
@@ -125,24 +163,38 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
     lastCheckedAt: null,
     slotDetectedCount: 0,
   };
+  setMonitor(id, state);
 
-  const intervalId = setInterval(async () => {
+  logEvent('info', EventType.MONITOR_STARTED, `Monitor started for ${config.destination}`, {
+    destination: config.destination,
+  });
+  emitToAll('MONITOR_STATUS', { monitorId: id, status: 'started', destination: config.destination });
+
+  // Use recursive setTimeout instead of setInterval so the adaptive delay
+  // is recalculated after every poll (not locked in at creation time).
+  let consecutiveEmptyPolls = 0;
+
+  async function poll() {
     const current = getMonitor(id);
     if (!current?.isRunning) return;
+
+    let justDetected = false;
 
     try {
       const slots = await fetchAvailableSlots(fullConfig);
       const newSlots = diffSlots(current.lastKnownSlots, slots);
 
-      // Update state atomically — avoid mutating the shared reference directly
       setMonitor(id, {
         ...current,
         lastKnownSlots: new Set(slots.map(slotKey)),
         lastCheckedAt: new Date(),
-        slotDetectedCount: current.slotDetectedCount + (newSlots.length > 0 ? newSlots.length : 0),
+        slotDetectedCount: current.slotDetectedCount + newSlots.length,
       });
 
       if (newSlots.length > 0) {
+        justDetected = true;
+        consecutiveEmptyPolls = 0;
+
         logEvent('info', EventType.SLOT_DETECTED, `${newSlots.length} new slot(s) detected for ${config.destination}`, {
           destination: config.destination,
         });
@@ -154,7 +206,6 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
           detectedAt: new Date().toISOString(),
         });
 
-        // Enqueue booking jobs if auto mode
         if (fullConfig.mode === 'auto') {
           for (const profileId of fullConfig.profileIds) {
             for (const slot of newSlots) {
@@ -167,22 +218,29 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
             }
           }
         }
+      } else {
+        consecutiveEmptyPolls++;
       }
     } catch (err) {
+      consecutiveEmptyPolls++;
       logEvent('error', EventType.BOOKING_FAILED, `Monitor poll error: ${(err as Error).message}`, {
         destination: config.destination,
       });
     }
-  }, config.intervalMs);
 
-  state.intervalId = intervalId;
+    // Schedule next poll with adaptive delay
+    const nextDelay = adaptiveInterval(fullConfig.intervalMs, consecutiveEmptyPolls, justDetected);
+    const timeoutId = setTimeout(poll, nextDelay);
+
+    // Store the timeout ID so stopMonitor can cancel it
+    const latest = getMonitor(id);
+    if (latest) setMonitor(id, { ...latest, intervalId: timeoutId as unknown as NodeJS.Timeout });
+  }
+
+  // Kick off first poll immediately
+  const timeoutId = setTimeout(poll, 0);
+  state.intervalId = timeoutId as unknown as NodeJS.Timeout;
   setMonitor(id, state);
-
-  logEvent('info', EventType.MONITOR_STARTED, `Monitor started for ${config.destination}`, {
-    destination: config.destination,
-  });
-
-  emitToAll('MONITOR_STATUS', { monitorId: id, status: 'started', destination: config.destination });
 
   return id;
 }
@@ -191,7 +249,7 @@ export function stopMonitor(id: string): void {
   const state = getMonitor(id);
   if (!state) throw new AppError(404, 'Monitor not found', 'NOT_FOUND');
 
-  if (state.intervalId) clearInterval(state.intervalId);
+  if (state.intervalId) clearTimeout(state.intervalId);
   state.isRunning = false;
   deleteMonitor(id);
 

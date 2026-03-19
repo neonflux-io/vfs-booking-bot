@@ -25,7 +25,6 @@ export async function runBooking(job: BookingJobPayload): Promise<BookingResult>
   // Load profile (fully decrypted)
   const profile = await getProfileForBooking(job.profileId);
 
-  // VFS credentials — email and password stored encrypted on the profile
   const vfsEmail = profile.email;
   const vfsPassword = profile.vfsPassword ?? '';
   if (!vfsPassword) {
@@ -40,47 +39,40 @@ export async function runBooking(job: BookingJobPayload): Promise<BookingResult>
     destination: job.destination,
   });
 
-  let proxyId: string | undefined;
+  // How many parallel tabs to race (configurable via Settings; default 2)
+  const parallelTabs = Math.min(
+    Math.max(1, (await getSetting<number>('booking.parallelTabs')) ?? 2),
+    4, // hard cap — more than 4 tabs rarely helps and wastes RAM
+  );
+
+  let lastProxyId: string | undefined;
 
   try {
     const result = await withRetry(
       async () => {
-        // Get a proxy from pool
-        const proxy = await getProxy(job.destination);
-        proxyId = proxy?.id;
+        // ── Launch N parallel browser attempts, take first success ─────────
+        const attempts = Array.from({ length: parallelTabs }, (_, i) =>
+          runSingleAttempt(i, job, profile, vfsEmail, vfsPassword)
+        );
 
-        // Load cached session cookies
-        const cookieState = await loadSession(job.profileId);
+        // Race: first fulfilled (successful booking) wins.
+        // If ALL fail, throw the last error so withRetry can retry the whole round.
+        const results = await Promise.allSettled(attempts);
+        const winner = results.find(
+          (r): r is PromiseFulfilledResult<{ confirmationNo: string; proxyId?: string }> =>
+            r.status === 'fulfilled'
+        );
 
-        // Launch browser
-        const context = await createBrowserContext(proxy, cookieState ?? undefined);
-
-        try {
-          const confirmationNo = await runBookingFlow(context, {
-            sessionId: job.profileId,
-            destination: job.destination,
-            visaType: job.visaType,
-            slot: job.slot,
-            profile: {
-              fullName: profile.fullName,
-              passportNumber: profile.passportNumber,
-              dob: profile.dob,
-              passportExpiry: profile.passportExpiry,
-              nationality: profile.nationality,
-              email: profile.email,
-              phone: profile.phone,
-              vfsEmail,
-              vfsPassword,
-            },
-          });
-
-          // Save fresh session cookies
-          await saveSession(job.profileId, context);
-
-          return confirmationNo;
-        } finally {
-          await context.close();
+        if (winner) {
+          lastProxyId = winner.value.proxyId;
+          return winner.value.confirmationNo;
         }
+
+        // All tabs failed — collect errors and throw the first one for retry logic
+        const errors = results
+          .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+          .map((r) => String(r.reason));
+        throw new Error(errors[0] ?? 'All parallel booking attempts failed');
       },
       {
         maxAttempts: job.attempt ?? 3,
@@ -106,11 +98,10 @@ export async function runBooking(job: BookingJobPayload): Promise<BookingResult>
     const message = err instanceof Error ? err.message : String(err);
     const isBlock = err instanceof AppError && err.code === 'IP_BLOCKED';
 
-    if (isBlock && proxyId) {
-      await reportBlock(proxyId);
+    if (isBlock && lastProxyId) {
+      await reportBlock(lastProxyId);
     }
 
-    // If session may be corrupt, clear it
     if (message.includes('session') || message.includes('login')) {
       await clearSession(job.profileId);
     }
@@ -118,10 +109,56 @@ export async function runBooking(job: BookingJobPayload): Promise<BookingResult>
     logEvent('error', EventType.BOOKING_FAILED, `Booking failed: ${message}`, {
       profileId: job.profileId,
       destination: job.destination,
-      proxyUsed: proxyId,
+      proxyUsed: lastProxyId,
       result: 'FAILED',
     });
 
     return { success: false, error: message };
+  }
+}
+
+// ── Single browser attempt (one tab) ──────────────────────────────────────────
+
+async function runSingleAttempt(
+  tabIndex: number,
+  job: BookingJobPayload,
+  profile: Awaited<ReturnType<typeof getProfileForBooking>>,
+  vfsEmail: string,
+  vfsPassword: string,
+): Promise<{ confirmationNo: string; proxyId?: string }> {
+  const proxy = await getProxy(job.destination);
+  const proxyId = proxy?.id;
+
+  // Each tab gets its own session to avoid cookie conflicts on parallel runs
+  const cookieState = tabIndex === 0 ? await loadSession(job.profileId) : undefined;
+  const context = await createBrowserContext(proxy, cookieState ?? undefined);
+
+  try {
+    const confirmationNo = await runBookingFlow(context, {
+      sessionId: `${job.profileId}-tab${tabIndex}`,
+      destination: job.destination,
+      visaType: job.visaType,
+      slot: job.slot,
+      profile: {
+        fullName: profile.fullName,
+        passportNumber: profile.passportNumber,
+        dob: profile.dob,
+        passportExpiry: profile.passportExpiry,
+        nationality: profile.nationality,
+        email: profile.email,
+        phone: profile.phone,
+        vfsEmail,
+        vfsPassword,
+      },
+    });
+
+    // Only persist session cookies from the winning tab (tab 0 = primary)
+    if (tabIndex === 0) {
+      await saveSession(job.profileId, context);
+    }
+
+    return { confirmationNo, proxyId };
+  } finally {
+    await context.close();
   }
 }
