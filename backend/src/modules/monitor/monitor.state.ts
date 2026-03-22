@@ -23,6 +23,8 @@ export interface MonitorState {
   slotDetectedCount: number;
   lastHttpStatus?: number;
   cookies?: string[];
+  userAgent?: string;
+  secChUa?: string;
 }
 
 // In-memory map of active monitors

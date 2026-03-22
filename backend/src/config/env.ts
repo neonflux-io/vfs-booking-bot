@@ -43,6 +43,7 @@ const envSchema = z.object({
   MONITOR_DEFAULT_INTERVAL_MS: z.coerce.number().default(10000),
   SESSION_DIR: z.string().default('/app/sessions'),
   BOOKING_MAX_RETRIES: z.coerce.number().default(3),
+  PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

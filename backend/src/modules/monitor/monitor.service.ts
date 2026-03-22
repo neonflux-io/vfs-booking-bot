@@ -11,6 +11,7 @@ import { env } from '@config/env';
 import { SlotInfo } from '@t/index';
 import { AppError } from '@middleware/errorHandler';
 import { prisma } from '@config/database';
+import { warmSessionWithBrowser, fetchSlotsWithBrowser } from './session.warmer';
 
 // VFS Global availability endpoint (discovered via DevTools network capture)
 // NOTE: This URL/params may change — update via vfs.selectors Settings if needed
@@ -18,16 +19,21 @@ import { prisma } from '@config/database';
 const VFS_AVAILABILITY_URL = 'https://visa.vfsglobal.com/{source}/{destination}/en/schedule-appointment/get-slots';
 
 const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Safari/605.1.15',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 OPR/108.0.0.0',
+  {
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+    ch: '"Google Chrome";v="134", "Chromium";v="134", "Not:A-Brand";v="24"'
+  },
+  {
+    ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+    ch: '"Google Chrome";v="134", "Chromium";v="134", "Not:A-Brand";v="24"'
+  },
+  {
+    ua: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+    ch: '"Google Chrome";v="134", "Chromium";v="134", "Not:A-Brand";v="24"'
+  }
 ];
 
-function getRandomUA() {
+function getRandomAgent() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
@@ -153,10 +159,11 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
   try {
     const url = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
     const proxyConfig = await getProxyConfig(id);
+    const agent = getRandomAgent();
     const response = await axios.get(url, {
       timeout: 15_000,
       headers: {
-        'User-Agent': getRandomUA(),
+        'User-Agent': agent.ua,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
         'Cache-Control': 'no-cache',
@@ -167,6 +174,9 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
         'Sec-Fetch-Site': 'none',
         'Sec-Fetch-User': '?1',
         'Referer': 'https://visa.vfsglobal.com/',
+        'sec-ch-ua': agent.ch,
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
       },
       proxy: proxyConfig,
     });
@@ -174,7 +184,13 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
     const cookies = response.headers['set-cookie'];
     if (cookies) {
       const latest = getMonitor(id);
-      setMonitor(id, { ...latest!, cookies, lastHttpStatus: 200 });
+      setMonitor(id, { 
+        ...latest!, 
+        cookies, 
+        userAgent: agent.ua, 
+        secChUa: agent.ch, 
+        lastHttpStatus: 200 
+      });
       logEvent('info', EventType.MONITOR_STARTED, `Acquired session cookies for ${id.slice(0, 4)}...`, { destination: destinationCode });
       return cookies;
     }
@@ -184,7 +200,23 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
     if (latest) setMonitor(id, { ...latest, lastHttpStatus: status || 500 });
     
     logEvent('warn', EventType.BOOKING_FAILED, `Failed to warm session for ${destinationCode}: ${(err as Error).message}${status ? ` (Status: ${status})` : ''}`);
-    if (status === 403) throw err; // Bubble up to trigger backoff
+    
+    if (status === 403) {
+      // PRO-UPGRADE: Try browser-based warming on 403
+      const proxyConfig = await getProxyConfig(id);
+      const browserResult = await warmSessionWithBrowser(id, sourceCode, destinationCode, proxyConfig as any);
+      if (browserResult) {
+        setMonitor(id, { 
+          ...latest!, 
+          cookies: browserResult.cookies, 
+          userAgent: browserResult.userAgent,
+          secChUa: browserResult.secChUa,
+          lastHttpStatus: 200 
+        });
+        return browserResult.cookies;
+      }
+      throw err; // Bubble up if browser warming also fails
+    }
   }
   return undefined;
 }
@@ -206,26 +238,49 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
     };
 
     const proxyConfig = await getProxyConfig(config.id);
-    const response = await axios.post(url, payload, {
-      timeout: 15_000,
-      headers: {
-        'User-Agent': getRandomUA(),
-        'Accept': 'application/json, text/plain, */*',
-        'Content-Type': 'application/json',
-        'Origin': 'https://visa.vfsglobal.com',
-        'Referer': `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment`,
-        'Cookie': monitorState.cookies?.join('; ') || '',
-        'SEC-CH-UA': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-        'SEC-CH-UA-MOBILE': '?0',
-        'SEC-CH-UA-PLATFORM': '"Windows"',
-        'SEC-FETCH-DEST': 'empty',
-        'SEC-FETCH-MODE': 'cors',
-        'SEC-FETCH-SITE': 'same-origin',
-      },
-      proxy: proxyConfig,
-    });
-
-    const data = response.data;
+    const agent = monitorState.userAgent && monitorState.secChUa 
+      ? { ua: monitorState.userAgent, ch: monitorState.secChUa }
+      : getRandomAgent();
+      
+    let data: any;
+    try {
+      const response = await axios.post(url, payload, {
+        timeout: 15_000,
+        headers: {
+          'User-Agent': agent.ua,
+          'Accept': 'application/json, text/plain, */*',
+          'Content-Type': 'application/json',
+          'Origin': 'https://visa.vfsglobal.com',
+          'Referer': `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment`,
+          'Cookie': monitorState.cookies?.join('; ') || '',
+          'sec-ch-ua': agent.ch,
+          'sec-ch-ua-mobile': '?0',
+          'sec-ch-ua-platform': '"Windows"',
+          'sec-fetch-dest': 'empty',
+          'sec-fetch-mode': 'cors',
+          'sec-fetch-site': 'same-origin',
+        },
+        proxy: proxyConfig,
+      });
+      data = response.data;
+    } catch (err: any) {
+      const status = err.response?.status;
+      const latest = getMonitor(config.id);
+      if (latest) setMonitor(config.id, { ...latest, lastHttpStatus: status || 500 });
+      
+      if (status === 403) {
+        logEvent('warn', EventType.BOOKING_FAILED, `Fetch slots blocked (403). Switching to Ultimate Bypass (Browser Fetch)...`);
+        const proxyConfig = await getProxyConfig(config.id);
+        return await fetchSlotsWithBrowser(
+          sourceCode,
+          destCode,
+          config.visaType,
+          proxyConfig as any,
+          monitorState.cookies
+        );
+      }
+      throw err;
+    }
     
     // Update monitor state with success status
     const latest = getMonitor(config.id);

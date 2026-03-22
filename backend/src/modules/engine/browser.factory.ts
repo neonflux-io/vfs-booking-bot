@@ -1,5 +1,6 @@
 import { chromium, BrowserContext } from 'playwright';
 import { ProxyConfig } from '@t/index';
+import { env } from '@config/env';
 
 // Realistic user agents (Chrome 121 on Windows)
 const USER_AGENTS = [
@@ -21,6 +22,7 @@ export async function createBrowserContext(
 
   const context = await chromium.launchPersistentContext('', {
     headless: true,
+    executablePath: env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     userAgent,
     viewport: { width: 1366, height: 768 },
     locale: 'en-GB',
