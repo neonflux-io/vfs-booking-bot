@@ -25,6 +25,7 @@ RUN apk add --no-cache \
     nss \
     freetype \
     freetype-dev \
+    openssl1.1-compat \
     harfbuzz \
     ca-certificates \
     ttf-freefont

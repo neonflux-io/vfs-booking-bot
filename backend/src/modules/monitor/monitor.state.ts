@@ -14,6 +14,7 @@ export interface MonitorState {
   lastKnownSlots: Set<string>; // slot keys: "date:time"
   lastCheckedAt: Date | null;
   slotDetectedCount: number;
+  lastHttpStatus?: number;
 }
 
 // In-memory map of active monitors

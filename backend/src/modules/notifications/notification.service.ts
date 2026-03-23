@@ -1,6 +1,6 @@
 import { getSetting } from '@modules/settings/settings.service';
 import { prisma } from '@config/database';
-import { sendTelegram } from './telegram';
+import { sendTelegram } from './telegram.bot';
 import { sendEmail } from './email';
 import { sendPushToAll } from './webPush';
 

@@ -12,6 +12,18 @@ import { AppError } from '@middleware/errorHandler';
 // NOTE: This URL/params may change — update via vfs.selectors Settings if needed
 const VFS_AVAILABILITY_URL = 'https://visa.vfsglobal.com/ago/{destination}/en/schedule-appointment/get-slots';
 
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Safari/605.1.15',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+];
+
+function getRandomUA() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
 // Maps UI destination keys → VFS 3-letter country codes used in the URL
 const DESTINATION_CODES: Record<string, string> = {
   // Europe
@@ -57,10 +69,17 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
   try {
     const url = buildAvailabilityUrl(config.destination);
     const response = await axios.get(url, {
-      timeout: 10_000,
+      timeout: 15_000,
       headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Referer': `https://visa.vfsglobal.com/ago/${config.destination}/en/schedule-appointment`,
+        'User-Agent': getRandomUA(),
+        'sec-ch-ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
       },
       params: {
         visaCategory: config.visaType,
@@ -69,6 +88,12 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
     });
 
     const data = response.data;
+    
+    // Update monitor state with success status
+    const currentMonitor = getMonitor(config.id);
+    if (currentMonitor) {
+      setMonitor(config.id, { ...currentMonitor, lastHttpStatus: 200 });
+    }
 
     // VFS can return various shapes — try all known structures
     let raw: Array<{ date?: string; slotDate?: string; time?: string; slotTime?: string }> = [];
@@ -100,9 +125,15 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
         visaType: config.visaType,
       }))
       .filter((s) => s.date && s.time);
-  } catch (err) {
+  } catch (err: any) {
+    const status = err.response?.status;
+    const currentMonitor = getMonitor(config.id);
+    if (currentMonitor) {
+      setMonitor(config.id, { ...currentMonitor, lastHttpStatus: status || 500 });
+    }
+
     logEvent('warn', EventType.BOOKING_FAILED,
-      `Monitor fetch error for ${config.destination}: ${(err as Error).message}`,
+      `Monitor fetch error for ${config.destination}: ${err.message}${status ? ` (Status: ${status})` : ''}`,
       { destination: config.destination },
     );
     return [];
@@ -141,12 +172,22 @@ function isInActiveWindow(): boolean {
 }
 
 function adaptiveInterval(baseMs: number, consecutiveEmptyPolls: number, justDetected: boolean): number {
-  if (justDetected) return HIGH_DEMAND_MS;
-  if (isInActiveWindow()) return Math.min(baseMs, ACTIVE_MS);
-  // Outside active windows: relax polling but never below QUIET_MIN_MS
-  // Back off slightly when nothing has been seen for a long time
-  const relaxed = consecutiveEmptyPolls > 60 ? baseMs * 2 : baseMs;
-  return Math.max(relaxed, QUIET_MIN_MS);
+  let delay = baseMs;
+
+  if (justDetected) {
+    delay = HIGH_DEMAND_MS;
+  } else if (isInActiveWindow()) {
+    delay = Math.min(baseMs, ACTIVE_MS);
+  } else {
+    // Outside active windows: relax polling but never below QUIET_MIN_MS
+    // Back off slightly when nothing has been seen for a long time
+    const relaxed = consecutiveEmptyPolls > 60 ? baseMs * 2 : baseMs;
+    delay = Math.max(relaxed, QUIET_MIN_MS);
+  }
+
+  // Add 10-20% jitter to avoid perfectly periodic requests
+  const jitter = delay * (0.1 + Math.random() * 0.1);
+  return Math.floor(delay + jitter);
 }
 
 // ── startMonitor ───────────────────────────────────────────────────────────────
@@ -229,7 +270,16 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
     }
 
     // Schedule next poll with adaptive delay
-    const nextDelay = adaptiveInterval(fullConfig.intervalMs, consecutiveEmptyPolls, justDetected);
+    let nextDelay = adaptiveInterval(fullConfig.intervalMs, consecutiveEmptyPolls, justDetected);
+
+    // Exponential backoff for 403 Forbidden errors to cool down the IP
+    if (current?.lastHttpStatus === 403) {
+      nextDelay = Math.max(nextDelay * 3, 60_000); // Wait at least 1 minute if blocked
+      logEvent('info', EventType.MONITOR_STARTED, `403 detected for ${config.destination}. Cooling down for ${Math.floor(nextDelay / 1000)}s`, {
+        destination: config.destination,
+      });
+    }
+
     const timeoutId = setTimeout(poll, nextDelay);
 
     // Store the timeout ID so stopMonitor can cancel it
@@ -266,5 +316,7 @@ export function getMonitorStatus() {
     lastCheckedAt: m.lastCheckedAt,
     slotDetectedCount: m.slotDetectedCount,
     mode: m.config.mode,
+    lastHttpStatus: m.lastHttpStatus,
   }));
 }
+

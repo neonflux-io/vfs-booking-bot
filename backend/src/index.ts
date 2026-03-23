@@ -6,6 +6,8 @@ import { connectRedis, disconnectRedis } from '@config/redis';
 import { createApp } from './app';
 import { initWebSocket } from '@modules/websocket/ws.server';
 import { startBookingWorker, stopBookingWorker } from '@modules/booking/booking.worker';
+import { initTelegramBot } from '@modules/notifications/telegram.bot';
+
 
 async function bootstrap() {
   // Connect to dependencies
@@ -25,6 +27,10 @@ async function bootstrap() {
   // Start BullMQ booking worker
   startBookingWorker();
   console.info('✅ Booking worker started');
+
+  // Interactive Telegram Bot
+  initTelegramBot();
+
 
   server.listen(env.PORT, () => {
     console.info(`✅ Server running on port ${env.PORT} [${env.NODE_ENV}]`);
