@@ -58,6 +58,12 @@ async function loginAndNavigate(
 
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
+  // Log what page we actually landed on before waiting for Angular
+  const landedUrl   = page.url();
+  const landedTitle = await page.title().catch(() => '');
+  logEvent('info', EventType.MONITOR_STARTED,
+    `[Warmer] Landed on: ${landedUrl} | "${landedTitle}"`);
+
   // Wait for Angular to bootstrap then for the router to finish loading login module
   await page.waitForSelector('[ng-version]', { timeout: 45000 });
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => null);
@@ -325,6 +331,7 @@ export async function fetchSlotsWithBrowser(
       userAgent: UA,
       viewport: { width: 1280, height: 720 },
       locale: 'en-GB',
+      ignoreHTTPSErrors: true,
       extraHTTPHeaders: {
         'accept-language': 'en-GB,en;q=0.9',
         'sec-ch-ua': CHDR,
