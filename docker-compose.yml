@@ -38,6 +38,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    shm_size: 1gb
     env_file: .env
     environment:
       DATABASE_URL: postgresql://vfsuser:vfspass@postgres:5432/vfsdb

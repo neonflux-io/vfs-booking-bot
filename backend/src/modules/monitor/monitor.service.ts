@@ -11,7 +11,8 @@ import { env } from '@config/env';
 import { SlotInfo } from '@t/index';
 import { AppError } from '@middleware/errorHandler';
 import { prisma } from '@config/database';
-import { warmSessionWithBrowser, fetchSlotsWithBrowser } from './session.warmer';
+import { warmSessionWithBrowser, fetchSlotsWithBrowser, VfsCredentials } from './session.warmer';
+import { decrypt } from '@utils/crypto';
 
 // VFS Global availability endpoint (discovered via DevTools network capture)
 // NOTE: This URL/params may change — update via vfs.selectors Settings if needed
@@ -39,13 +40,15 @@ function getRandomAgent() {
 
 // Maps UI source keys -> VFS 3-letter source country codes
 const SOURCE_CODES: Record<string, string> = {
-  uk:  'gbr',
-  usa: 'usa',
+  uk:     'gbr',
+  usa:    'usa',
+  angola: 'ago',
 };
 
 // Maps UI destination keys -> VFS 3-letter destination country codes
 const DESTINATION_CODES: Record<string, string> = {
   portugal: 'prt',
+  brazil:   'bra',
 };
 
 function getSourceCode(source: string): string {
@@ -142,7 +145,7 @@ async function rotateProxy(id: string) {
             host: next.host,
             port: next.port,
             username: next.username,
-            password: '', 
+            password: next.passwordEnc ? decrypt(next.passwordEnc) : '',
           }
         }
       });
@@ -152,9 +155,18 @@ async function rotateProxy(id: string) {
 }
 
 
-async function warmSession(id: string, sourceCode: string, destinationCode: string): Promise<string[] | undefined> {
+const COOKIE_TTL_MS = 28 * 60 * 1000; // 28 minutes — VFS session expires ~30 min
+
+async function warmSession(id: string, sourceCode: string, destinationCode: string, visaType: string, credentials?: VfsCredentials): Promise<string[] | undefined> {
   const current = getMonitor(id);
-  if (current?.cookies?.length) return current.cookies;
+  if (current?.cookies?.length) {
+    const age = current.cookiesSetAt
+      ? Date.now() - current.cookiesSetAt.getTime()
+      : COOKIE_TTL_MS + 1;
+    if (age < COOKIE_TTL_MS) return current.cookies; // still fresh
+    logEvent('info', EventType.MONITOR_STARTED,
+      `Cookies expired for monitor ${id.slice(0, 4)}… — re-warming session.`);
+  }
 
   try {
     const url = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
@@ -184,12 +196,13 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
     const cookies = response.headers['set-cookie'];
     if (cookies) {
       const latest = getMonitor(id);
-      setMonitor(id, { 
-        ...latest!, 
-        cookies, 
-        userAgent: agent.ua, 
-        secChUa: agent.ch, 
-        lastHttpStatus: 200 
+      setMonitor(id, {
+        ...latest!,
+        cookies,
+        cookiesSetAt: new Date(),
+        userAgent: agent.ua,
+        secChUa: agent.ch,
+        lastHttpStatus: 200
       });
       logEvent('info', EventType.MONITOR_STARTED, `Acquired session cookies for ${id.slice(0, 4)}...`, { destination: destinationCode });
       return cookies;
@@ -204,11 +217,12 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
     if (status === 403) {
       // Phase 16: Try browser-based warming + in-session slot fetch
       const proxyConfig = await getProxyConfig(id);
-      const browserResult = await warmSessionWithBrowser(id, sourceCode, destinationCode, proxyConfig as any);
+      const browserResult = await warmSessionWithBrowser(id, sourceCode, destinationCode, visaType, proxyConfig as any, credentials);
       if (browserResult) {
-        setMonitor(id, { 
-          ...latest!, 
-          cookies: browserResult.cookies, 
+        setMonitor(id, {
+          ...latest!,
+          cookies: browserResult.cookies,
+          cookiesSetAt: new Date(),
           userAgent: browserResult.userAgent,
           secChUa: browserResult.secChUa,
           lastHttpStatus: 200,
@@ -222,13 +236,41 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
   return undefined;
 }
 
+/**
+ * Parses an array of Set-Cookie header strings and returns only the
+ * "name=value" portion of each cookie, suitable for use in a Cookie request header.
+ */
+function parseSetCookieToCookieHeader(setCookieHeaders: string[]): string {
+  return setCookieHeaders
+    .map((h) => h.split(';')[0].trim())
+    .join('; ');
+}
+
+async function getVfsCredentials(profileIds: string[]): Promise<VfsCredentials | undefined> {
+  const profileId = profileIds[0];
+  if (!profileId) return undefined;
+  try {
+    const profile = await prisma.profile.findUnique({
+      where: { id: profileId },
+      select: { email: true, vfsPasswordEnc: true },
+    });
+    if (profile?.email && profile?.vfsPasswordEnc) {
+      return { email: profile.email, password: decrypt(profile.vfsPasswordEnc) };
+    }
+  } catch {}
+  return undefined;
+}
+
 async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
   const sourceCode = getSourceCode(config.sourceCountry);
   const destCode = getDestinationCode(config.destination);
   const url = buildAvailabilityUrl(sourceCode, destCode);
 
+  // Fetch VFS login credentials from the first associated profile (if available)
+  const vfsCreds = await getVfsCredentials(config.profileIds);
+
   try {
-    const cookies = await warmSession(config.id, sourceCode, destCode);
+    const cookies = await warmSession(config.id, sourceCode, destCode, config.visaType, vfsCreds);
     
     const monitorState = getMonitor(config.id); 
     if (!monitorState) throw new Error(`Monitor ${config.id} not found during slot fetch.`);
@@ -258,10 +300,17 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
     };
 
     const proxyConfig = await getProxyConfig(config.id);
-    const agent = monitorState.userAgent && monitorState.secChUa 
+    const agent = monitorState.userAgent && monitorState.secChUa
       ? { ua: monitorState.userAgent, ch: monitorState.secChUa }
       : getRandomAgent();
-      
+
+    // Extract XSRF-TOKEN from stored cookies for Angular CSRF protection.
+    // Browser-warmed cookies are stored as "name=value"; HTTP-warmed ones may include
+    // semicolons (full Set-Cookie format) — the split handles both.
+    const xsrfEntry = (monitorState.cookies ?? []).find(c => c.startsWith('XSRF-TOKEN='));
+    const xsrfRaw = xsrfEntry ? xsrfEntry.split('=').slice(1).join('=') : undefined;
+    const xsrfToken = xsrfRaw ? decodeURIComponent(xsrfRaw) : undefined;
+
     let data: any;
     try {
       const response = await axios.post(url, payload, {
@@ -272,7 +321,8 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
           'Content-Type': 'application/json',
           'Origin': 'https://visa.vfsglobal.com',
           'Referer': `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment`,
-          'Cookie': monitorState.cookies?.join('; ') || '',
+          'Cookie': parseSetCookieToCookieHeader(monitorState.cookies ?? []),
+          ...(xsrfToken && { 'X-XSRF-TOKEN': xsrfToken }),
           'sec-ch-ua': agent.ch,
           'sec-ch-ua-mobile': '?0',
           'sec-ch-ua-platform': '"Windows"',
@@ -296,7 +346,9 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
           destCode,
           config.visaType,
           proxyConfig as any,
-          monitorState.cookies
+          monitorState.cookies,
+          false,
+          vfsCreds,
         );
       }
       throw err;
@@ -574,6 +626,7 @@ export function getMonitorStatus() {
     mode: m.config.mode,
     sourceCountry: m.config.sourceCountry,
     lastHttpStatus: m.lastHttpStatus,
+    interval: m.config.intervalMs,
   }));
 }
 

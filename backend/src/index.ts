@@ -1,6 +1,10 @@
 import 'dotenv/config';
+import fs from 'fs';
 import http from 'http';
 import { env } from '@config/env';
+
+// Ensure session directory exists (created by Dockerfile in Docker; this handles local dev)
+fs.mkdirSync(env.SESSION_DIR, { recursive: true });
 import { connectDatabase, disconnectDatabase } from '@config/database';
 import { connectRedis, disconnectRedis } from '@config/redis';
 import { createApp } from './app';

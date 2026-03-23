@@ -45,6 +45,7 @@ services:
       - ./backend/src:/app/src
       - ./backend/prisma:/app/prisma
       - sessions-data:/app/sessions
+    command: sh -c "npx prisma migrate deploy && npm run dev"
     depends_on:
       postgres:
         condition: service_healthy

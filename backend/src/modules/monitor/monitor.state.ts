@@ -1,7 +1,7 @@
 export interface MonitorConfig {
   id: string;
-  sourceCountry: 'uk' | 'usa';
-  destination: 'portugal';
+  sourceCountry: 'uk' | 'usa' | 'angola';
+  destination: 'portugal' | 'brazil';
   visaType: string;
   intervalMs: number;
   profileIds: string[];
@@ -23,6 +23,7 @@ export interface MonitorState {
   slotDetectedCount: number;
   lastHttpStatus?: number;
   cookies?: string[];
+  cookiesSetAt?: Date;   // timestamp of last cookie refresh — used for 28-min TTL
   userAgent?: string;
   secChUa?: string;
   earlySlotData?: any;   // set by warming browser when in-session fetch succeeds
