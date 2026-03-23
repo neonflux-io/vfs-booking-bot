@@ -93,8 +93,10 @@ async function loginAndNavigate(
       .catch(() => false);
     if (clicked) {
       logEvent('info', EventType.MONITOR_STARTED, `[Warmer] Dismissed OneTrust via: ${sel}`);
-      // Wait for Angular to react to consent and load the login module
-      await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+      // Give Angular time to remove the overlay and render the login form
+      // networkidle fires instantly (no network requests from consent click),
+      // so we need an explicit wait for the DOM render cycle
+      await page.waitForTimeout(3000);
       break;
     }
   }
@@ -114,9 +116,12 @@ async function loginAndNavigate(
   const emailSelector = 'input[id="mat-input-0"], input[type="email"], input[formcontrolname="email"]';
   const pwdSelector   = 'input[id="mat-input-1"], input[type="password"], input[formcontrolname="password"]';
 
-  // Debug: if visible wait fails, log ALL inputs + page content snippet
-  const emailVisible = await page.waitForSelector(emailSelector, { timeout: 20000, state: 'visible' })
+  // First check if it's attached (exists in DOM) — tells us if it's a render vs visibility issue
+  const emailAttached = await page.waitForSelector(emailSelector, { timeout: 20000, state: 'attached' })
     .then(() => true).catch(() => false);
+  const emailVisible = emailAttached &&
+    await page.waitForSelector(emailSelector, { timeout: 5000, state: 'visible' })
+      .then(() => true).catch(() => false);
   if (!emailVisible) {
     const allInputs = await page.evaluate(() =>
       Array.from(document.querySelectorAll('input')).map(i => ({
@@ -128,7 +133,7 @@ async function loginAndNavigate(
       document.body?.innerText?.slice(0, 500)
     ).catch(() => '');
     logEvent('warn', EventType.MONITOR_STARTED,
-      `[Warmer] Email input not found. Inputs: ${JSON.stringify(allInputs)} | Body: ${pageText}`);
+      `[Warmer] Email input not found (attached=${emailAttached}). Inputs: ${JSON.stringify(allInputs)} | Body: ${pageText}`);
     throw new Error('Login form not found after OneTrust dismiss attempt');
   }
   await page.fill(emailSelector, credentials.email);
