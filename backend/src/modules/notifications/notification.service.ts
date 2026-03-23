@@ -7,21 +7,50 @@ import { sendPushToAll } from './webPush';
 interface NotificationPayload {
   event: 'SLOT_DETECTED' | 'BOOKING_SUCCESS' | 'BOOKING_FAILED';
   profileId?: string;
+  sourceCountry?: string;
   destination?: string;
+  visaType?: string;
   confirmationNo?: string;
   slotDate?: string;
   errorMessage?: string;
+}
+
+const VISA_NAMES: Record<string, string> = {
+  SCH: 'Schengen Short-Stay',
+  TRV: 'Tourist Visa',
+  VIS: 'Visitor Visa',
+  BUS: 'Business Visa',
+  STU: 'Student Visa',
+  WRK: 'Work Visa',
+  SEA: 'Seasonal Work',
+  JOB: 'Job Seeker',
+  DNV: 'Digital Nomad',
+  D7:  'D7 Passive Income',
+  GLD: 'Golden Visa',
+  FAM: 'Family Reunification',
+  MED: 'Medical Treatment',
+  TRN: 'Airport Transit',
+};
+
+function getVisaLabel(code?: string): string {
+  if (!code) return 'N/A';
+  return VISA_NAMES[code] || code;
+}
+
+function getRouteLabel(source?: string, dest?: string): string {
+  if (!source || !dest) return dest?.toUpperCase() || 'VFS';
+  return `[${source.toUpperCase()} → ${dest.toUpperCase()}]`;
 }
 
 function formatTelegramMessage(p: NotificationPayload & { profileName?: string }): string {
   const ts = new Date().toISOString();
   switch (p.event) {
     case 'SLOT_DETECTED':
-      return `🟡 *Slot Detected*\nDestination: ${p.destination}\nDate: ${p.slotDate ?? 'N/A'}\n_${ts}_`;
+      return `🟡 *SLOT DETECTED ${getRouteLabel(p.sourceCountry, p.destination)}*\nVisa: ${getVisaLabel(p.visaType)}\nDate: ${p.slotDate ?? 'N/A'}\n\n_${ts}_`;
     case 'BOOKING_SUCCESS':
-      return `✅ *Booking Confirmed*\nApplicant: ${p.profileName ?? 'Unknown'}\nDestination: ${p.destination}\nRef: \`${p.confirmationNo}\`\n_${ts}_`;
+      return `✅ *BOOKING CONFIRMED ${getRouteLabel(p.sourceCountry, p.destination)}*\nApplicant: ${p.profileName ?? 'Unknown'}\nRef: \`${p.confirmationNo}\`\n\n_${ts}_`;
     case 'BOOKING_FAILED':
-      return `❌ *Booking Failed*\nApplicant: ${p.profileName ?? 'Unknown'}\nDestination: ${p.destination}\nError: ${p.errorMessage}\n_${ts}_`;
+      return `❌ *BOOKING FAILED ${getRouteLabel(p.sourceCountry, p.destination)}*\nApplicant: ${p.profileName ?? 'Unknown'}\nError: ${p.errorMessage}\n\n_${ts}_`;
   }
 }
 

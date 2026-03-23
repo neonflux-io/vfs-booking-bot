@@ -30,3 +30,8 @@ coverage/
 # Playwright
 playwright-report/
 test-results/
+
+# Build artifacts & temp logs
+*.tsbuildinfo
+frontend/tsc_errors.txt
+backend/tsc_errors.txt

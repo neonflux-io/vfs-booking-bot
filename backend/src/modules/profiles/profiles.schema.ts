@@ -8,6 +8,8 @@ export const createProfileSchema = z.object({
   nationality: z.string().min(2),
   email: z.string().email(),
   phone: z.string().min(7),
+  gender: z.enum(['MALE', 'FEMALE', 'OTHER']).default('MALE'),
+  passportIssueDate: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional(),
   vfsPassword: z.string().min(1).optional(),
   priority: z.enum(['HIGH', 'NORMAL']).default('NORMAL'),
 });

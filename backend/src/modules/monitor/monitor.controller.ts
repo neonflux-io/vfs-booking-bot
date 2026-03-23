@@ -3,8 +3,15 @@ import { startMonitor, stopMonitor, getMonitorStatus } from './monitor.service';
 
 export function startMonitorHandler(req: Request, res: Response, next: NextFunction) {
   try {
-    const { destination, visaType, intervalMs, profileIds, mode } = req.body;
-    const id = startMonitor({ destination, visaType, intervalMs: intervalMs ?? 10000, profileIds: profileIds ?? [], mode: mode ?? 'auto' });
+    const { sourceCountry, destination, visaType, intervalMs, profileIds, mode } = req.body;
+    const id = startMonitor({ 
+      sourceCountry: sourceCountry || 'uk', 
+      destination, 
+      visaType, 
+      intervalMs: intervalMs ?? 10000, 
+      profileIds: profileIds ?? [], 
+      mode: mode ?? 'auto' 
+    });
     res.json({ monitorId: id, message: 'Monitor started' });
   } catch (err) { next(err); }
 }

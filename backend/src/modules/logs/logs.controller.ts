@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { getLogs, createCsvExportStream, LogFilter } from './logs.service';
+import { getLogs, createCsvExportStream, LogFilter, clearLogs as clearLogsService } from './logs.service';
+import { getOptimalPollingWindows } from './analytics.service';
 
 export async function listLogs(req: Request, res: Response, next: NextFunction) {
   try {
@@ -35,6 +36,23 @@ export function exportLogs(req: Request, res: Response, next: NextFunction) {
     const stream = createCsvExportStream(filter);
     stream.pipe(res);
     stream.on('error', next);
+  } catch (err) {
+    next(err);
+  }
+}
+export async function getAnalytics(req: Request, res: Response, next: NextFunction) {
+  try {
+    const destination = req.query.destination as string;
+    const stats = await getOptimalPollingWindows(destination);
+    res.json(stats);
+  } catch (err) {
+    next(err);
+  }
+}
+export async function clearLogs(req: Request, res: Response, next: NextFunction) {
+  try {
+    await clearLogsService();
+    res.json({ message: 'Logs cleared successfully' });
   } catch (err) {
     next(err);
   }

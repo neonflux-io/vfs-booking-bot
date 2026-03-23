@@ -26,11 +26,18 @@ export default function SetupPage() {
   const qc = useQueryClient();
   const { setMonitors } = useMonitorStore();
 
+  const [sourceCountry, setSourceCountry] = useState<'uk' | 'usa'>('uk');
   const [destination, setDestination] = useState('portugal');
-  const [visaType, setVisaType] = useState('tourist');
+  const [visaType, setVisaType] = useState('SCH');
   const [intervalMs, setIntervalMs] = useState(10000);
   const [mode, setMode] = useState<'auto' | 'manual'>('auto');
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>([]);
+  const [proxy, setProxy] = useState<{ 
+    host: string; 
+    port: number; 
+    username?: string; 
+    password?: string 
+  } | null>(null);
 
   const { data: profilesData } = useQuery({
     queryKey: ['profiles'],
@@ -45,8 +52,21 @@ export default function SetupPage() {
   });
 
   const startMutation = useMutation({
-    mutationFn: () => api.post('/monitor/start', { destination, visaType, intervalMs, profileIds: selectedProfileIds, mode }),
-    onSuccess: () => { setSelectedProfileIds([]); refetchStatus(); qc.invalidateQueries({ queryKey: ['monitor-status'] }); },
+    mutationFn: () => api.post('/monitor/start', { 
+      sourceCountry,
+      destination, 
+      visaType, 
+      intervalMs, 
+      profileIds: selectedProfileIds, 
+      mode,
+      proxy: proxy?.host ? proxy : undefined
+    }),
+    onSuccess: () => { 
+      setSelectedProfileIds([]); 
+      setProxy(null);
+      refetchStatus(); 
+      qc.invalidateQueries({ queryKey: ['monitor-status'] }); 
+    },
   });
 
   const stopMutation = useMutation({
@@ -58,8 +78,8 @@ export default function SetupPage() {
 
   return (
     <DashboardShell 
-      title="Monitoring Control" 
-      description="Configure and manage high-speed visa appointment detection engines."
+      title="Monitoring Engine Control" 
+      description="Deploy and calibrate advanced visa appointment detection units with real-time acquisition logic."
     >
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
         
@@ -78,21 +98,24 @@ export default function SetupPage() {
               </div>
             </div>
 
-            <div className="space-y-8">
-              {/* Destination & Visa */}
-              <div className="grid grid-cols-2 gap-6">
+            <div className="space-y-10">
+              {/* Route Configuration */}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+                <CustomSelect
+                  label="Applying From"
+                  value={sourceCountry}
+                  onChange={(val: any) => setSourceCountry(val)}
+                  options={[
+                    { value: 'uk', label: 'United Kingdom' },
+                    { value: 'usa', label: 'United States' },
+                  ]}
+                />
                 <CustomSelect
                   label="Target Destination"
                   value={destination}
                   onChange={setDestination}
                   options={[
                     { value: 'portugal', label: 'Portugal' },
-                    { value: 'france', label: 'France' },
-                    { value: 'germany', label: 'Germany' },
-                    { value: 'spain', label: 'Spain' },
-                    { value: 'italy', label: 'Italy' },
-                    { value: 'usa', label: 'United States' },
-                    { value: 'brazil', label: 'Brazil' },
                   ]}
                 />
                 <CustomSelect
@@ -100,10 +123,20 @@ export default function SetupPage() {
                   value={visaType}
                   onChange={setVisaType}
                   options={[
-                    { value: 'tourist', label: 'Tourist (Short Stay)' },
-                    { value: 'business', label: 'Business / Professional' },
-                    { value: 'student', label: 'Student / Academic' },
-                    { value: 'family', label: 'Family Reunion' },
+                    { value: 'SCH', label: 'Schengen Short-Stay Visa' },
+                    { value: 'TRV', label: 'Tourist Visa' },
+                    { value: 'VIS', label: 'Visitor Visa' },
+                    { value: 'BUS', label: 'Business Visa' },
+                    { value: 'STU', label: 'Student Visa' },
+                    { value: 'WRK', label: 'Work Visa' },
+                    { value: 'SEA', label: 'Seasonal Work Visa' },
+                    { value: 'JOB', label: 'Job Seeker Visa' },
+                    { value: 'DNV', label: 'Digital Nomad Visa' },
+                    { value: 'D7',  label: 'D7 Passive Income Visa' },
+                    { value: 'GLD', label: 'Golden Visa (Investment)' },
+                    { value: 'FAM', label: 'Family Reunification' },
+                    { value: 'MED', label: 'Medical Treatment Visa' },
+                    { value: 'TRN', label: 'Airport Transit Visa' },
                   ]}
                 />
               </div>
@@ -207,6 +240,61 @@ export default function SetupPage() {
               </button>
             </div>
           </div>
+
+          {/* Proxy Configuration (New) */}
+          <div className="card p-8 bg-card/40 backdrop-blur-md border-primary/10 shadow-xl mt-6">
+            <div className="flex items-center gap-4 mb-6">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold tracking-tight">Secure Tunneling (Proxy)</h3>
+                <p className="text-xs text-muted-foreground">Bypass IP blocks with residential proxies.</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-black text-muted-foreground pl-1">Proxy Host</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. proxy.myservice.com"
+                  className="w-full bg-accent/20 border-transparent focus:border-primary/50 rounded-xl p-3 text-sm transition-all"
+                  value={proxy?.host || ''}
+                  onChange={(e) => setProxy(prev => ({ ...prev!, host: e.target.value, port: prev?.port || 8080 }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-black text-muted-foreground pl-1">Port</label>
+                <input 
+                  type="number" 
+                  placeholder="8080"
+                  className="w-full bg-accent/20 border-transparent focus:border-primary/50 rounded-xl p-3 text-sm transition-all"
+                  value={proxy?.port || ''}
+                  onChange={(e) => setProxy(prev => ({ ...prev!, port: Number(e.target.value) }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-black text-muted-foreground pl-1">Username (Opt)</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-accent/20 border-transparent focus:border-primary/50 rounded-xl p-3 text-sm transition-all"
+                  value={proxy?.username || ''}
+                  onChange={(e) => setProxy(prev => ({ ...prev!, username: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-black text-muted-foreground pl-1">Password (Opt)</label>
+                <input 
+                  type="password" 
+                  className="w-full bg-accent/20 border-transparent focus:border-primary/50 rounded-xl p-3 text-sm transition-all"
+                  value={proxy?.password || ''}
+                  onChange={(e) => setProxy(prev => ({ ...prev!, password: e.target.value }))}
+                />
+              </div>
+            </div>
+            <p className="mt-4 text-[10px] text-muted-foreground italic">Note: HTTP/HTTPS proxies ONLY. SOCKS proxies require additional setup.</p>
+          </div>
         </div>
 
         {/* Right Column: Active Streams (5 slots) */}
@@ -234,7 +322,9 @@ export default function SetupPage() {
                         <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-green-500 animate-ping opacity-50" />
                       </div>
                       <div>
-                        <h4 className="text-sm font-bold uppercase tracking-tight">{m.destination}</h4>
+                        <h4 className="text-sm font-bold uppercase tracking-tight">
+                          {m.sourceCountry ? m.sourceCountry.toUpperCase() : 'N/A'} → {m.destination.toUpperCase()}
+                        </h4>
                         <p className="text-[10px] text-muted-foreground">{m.visaType}</p>
                       </div>
                     </div>

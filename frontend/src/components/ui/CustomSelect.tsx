@@ -51,7 +51,7 @@ export function CustomSelect({ options, value, onChange, label, className, place
           isOpen ? "ring-2 ring-primary/20 border-primary bg-background shadow-lg" : "shadow-sm"
         )}
       >
-        <span className={cn("text-sm font-medium", !selectedOption && "text-muted-foreground")}>
+        <span className={cn("text-sm font-medium truncate pr-2", !selectedOption && "text-muted-foreground")}>
           {selectedOption ? selectedOption.label : placeholder || "Select..."}
         </span>
         <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform duration-300", isOpen && "rotate-180")} />

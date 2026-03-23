@@ -18,13 +18,13 @@ export function DashboardShell({ children, title, description, actions }: Dashbo
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
       <header className="h-20 border-b bg-card/10 backdrop-blur-md px-8 flex items-center justify-between sticky top-0 z-40">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-black tracking-tight text-foreground">{title}</h1>
-          <p className="text-sm text-muted-foreground/80 font-medium uppercase tracking-wider">{description}</p>
+        <div className="flex flex-col min-w-0">
+          <h1 className="text-2xl font-black tracking-tight text-foreground truncate">{title}</h1>
+          <p className="text-[10px] md:text-sm text-muted-foreground/80 font-medium uppercase tracking-wider truncate">{description}</p>
         </div>
 
-        <div className="flex items-center gap-4">
-          {actions && <div className="mr-2">{actions}</div>}
+        <div className="flex items-center gap-4 flex-shrink-0 ml-4">
+          {actions && <div className="flex-shrink-0">{actions}</div>}
           
           <div className="mr-4 h-9 flex items-center border-r pr-4 border-border/50">
              <ThemeToggle size="sm" />

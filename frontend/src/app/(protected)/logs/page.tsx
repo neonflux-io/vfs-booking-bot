@@ -15,7 +15,8 @@ import {
   RefreshCw,
   User,
   History,
-  ArrowRight
+  ArrowRight,
+  Trash2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CustomSelect } from '@/components/ui/CustomSelect';
@@ -49,6 +50,7 @@ export default function LogsPage() {
   const [to, setTo] = useState('');
   const [eventType, setEventType] = useState('');
   const [level, setLevel] = useState('');
+  const [isClearing, setIsClearing] = useState(false);
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['logs', from, to, eventType, level],
@@ -72,6 +74,19 @@ export default function LogsPage() {
     window.open(`/api/logs/export?${params}`, '_blank');
   }
 
+  async function handleClearLogs() {
+    if (!confirm('Are you certain you want to truncate all diagnostic logs? This action is irreversible.')) return;
+    setIsClearing(true);
+    try {
+      await api.delete('/logs');
+      refetch();
+    } catch (err) {
+      console.error('Failed to clear logs:', err);
+    } finally {
+      setIsClearing(false);
+    }
+  }
+
   const getLevelIcon = (lvl: string) => {
     switch (lvl) {
       case 'ERROR': return <AlertCircle className="w-3.5 h-3.5 text-red-500" />;
@@ -82,8 +97,8 @@ export default function LogsPage() {
 
   return (
     <DashboardShell 
-      title="System Diagnostics" 
-      description="Real-time event stream and historical logs for monitoring engine execution."
+      title="System Intelligence Diagnostics" 
+      description="REAL-TIME TELEMETRY STREAM AND HISTORICAL EVENT ANALYSIS FOR MONITORING ENGINES."
       actions={
         <button 
           onClick={downloadCsv}
@@ -97,24 +112,21 @@ export default function LogsPage() {
       <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
         
         {/* Advanced Filter Bar */}
-        <div className="card p-4 bg-card/40 backdrop-blur-md border-dashed border-muted flex flex-wrap items-end gap-4 relative z-[30]">
+        <div className="card p-6 bg-card/40 backdrop-blur-md border-dashed border-muted grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 relative z-[30]">
           <CustomDatePicker
-            label="Time Range (From)"
+            label="From"
             value={from}
             onChange={setFrom}
-            className="flex-1 min-w-[200px]"
           />
           <CustomDatePicker
-            label="Time Range (To)"
+            label="To"
             value={to}
             onChange={setTo}
-            className="flex-1 min-w-[200px]"
           />
           <CustomSelect
-            label="Event Category"
+            label="Category"
             value={eventType}
             onChange={setEventType}
-            className="flex-1 min-w-[150px]"
             options={[
               { value: '', label: 'All Events' },
               ...EVENT_TYPES.map(t => ({ value: t, label: t.replace(/_/g, ' ') }))
@@ -124,7 +136,6 @@ export default function LogsPage() {
             label="Severity"
             value={level}
             onChange={setLevel}
-            className="flex-1 min-w-[120px]"
             options={[
               { value: '', label: 'All Levels' },
               { value: 'INFO', label: 'INFO' },
@@ -133,15 +144,47 @@ export default function LogsPage() {
             ]}
           />
           
-          <button 
-            onClick={() => refetch()}
-            className={cn(
-              "btn-secondary h-11 w-11 p-0 flex items-center justify-center transition-all rounded-xl",
-              isFetching && "animate-spin"
-            )}
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
+          <div className="flex items-end">
+            <motion.button 
+              onClick={() => refetch()}
+              disabled={isFetching}
+              whileTap={{ scale: 0.96 }}
+              animate={isFetching ? { 
+                scale: [1, 0.98, 1],
+                borderColor: ["rgba(var(--primary-rgb), 0.1)", "rgba(var(--primary-rgb), 0.4)", "rgba(var(--primary-rgb), 0.1)"]
+              } : { scale: 1 }}
+              transition={isFetching ? { 
+                repeat: Infinity, 
+                duration: 1.5, 
+                ease: "easeInOut" 
+              } : { duration: 0.2 }}
+              className={cn(
+                "btn-secondary h-11 w-full flex items-center justify-center transition-all rounded-xl gap-2 hover:bg-accent/20 border border-primary/10 relative overflow-hidden group whitespace-nowrap",
+                isFetching && "ring-2 ring-primary/10"
+              )}
+            >
+              {isFetching && (
+                <motion.div 
+                  initial={{ x: "-100%" }}
+                  animate={{ x: "100%" }}
+                  transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+                  className="absolute inset-0 bg-gradient-to-r from-transparent via-primary/5 to-transparent z-0"
+                />
+              )}
+              
+              <motion.div
+                animate={isFetching ? { rotate: 360 } : { rotate: 0 }}
+                transition={isFetching ? { repeat: Infinity, duration: 1, ease: "linear" } : { duration: 0.2 }}
+                className="relative z-10"
+              >
+                <RefreshCw className="w-4 h-4 text-primary" />
+              </motion.div>
+              
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] relative z-10 text-foreground group-hover:text-primary transition-colors">
+                {isFetching ? 'Scanning' : 'Refresh'}
+              </span>
+            </motion.button>
+          </div>
         </div>
 
         {/* Diagnostic Terminal View */}
@@ -156,11 +199,20 @@ export default function LogsPage() {
                 <div className="h-4 w-[1px] bg-border/50 mx-2" />
                 <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-[0.2em] font-black">diagnostic.stream</span>
              </div>
-             <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={handleClearLogs}
+                  disabled={isClearing || !data?.items?.length}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-colors border border-red-500/20 disabled:opacity-30 disabled:cursor-not-allowed group/clear"
+                >
+                   <Trash2 className="w-3 h-3 transition-transform group-hover/clear:scale-110" />
+                   <span className="text-[9px] font-black uppercase tracking-widest">Clear Stream</span>
+                </button>
+                <div className="h-4 w-[1px] bg-border/20 mx-1" />
                 <span className="text-[10px] font-mono text-muted-foreground/60 uppercase tracking-widest bg-accent/20 px-2 py-0.5 rounded">
                    Buffer: {data?.items?.length || 0}
                 </span>
-             </div>
+              </div>
           </div>
 
           <div className="overflow-x-auto min-h-[500px] relative">

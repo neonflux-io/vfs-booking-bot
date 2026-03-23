@@ -1,23 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
-import { getAllSettings, setSetting } from './settings.service';
+import * as settingsService from './settings.service';
 
-export async function getSettings(req: Request, res: Response, next: NextFunction) {
+export async function getAll(req: Request, res: Response, next: NextFunction) {
   try {
-    const settings = await getAllSettings();
-    res.json(settings);
-  } catch (err) {
-    next(err);
-  }
+    const settings = await settingsService.getAllSettings();
+    const global = await settingsService.getGlobalSettings();
+    res.json({ ...settings, global });
+  } catch (err) { next(err); }
 }
 
-export async function updateSettings(req: Request, res: Response, next: NextFunction) {
+export async function updateGlobal(req: Request, res: Response, next: NextFunction) {
   try {
-    const updates = req.body as Record<string, unknown>;
-    await Promise.all(
-      Object.entries(updates).map(([key, value]) => setSetting(key, value))
-    );
-    res.json({ message: 'Settings updated' });
-  } catch (err) {
-    next(err);
-  }
+    await settingsService.updateGlobalSettings(req.body);
+    res.json({ success: true });
+  } catch (err) { next(err); }
 }

@@ -1,10 +1,17 @@
 export interface MonitorConfig {
   id: string;
-  destination: 'brazil' | 'portugal';
+  sourceCountry: 'uk' | 'usa';
+  destination: 'portugal';
   visaType: string;
   intervalMs: number;
   profileIds: string[];
   mode: 'auto' | 'manual';
+  proxy?: {
+    host: string;
+    port: number;
+    username?: string;
+    password?: string;
+  };
 }
 
 export interface MonitorState {
@@ -15,6 +22,7 @@ export interface MonitorState {
   lastCheckedAt: Date | null;
   slotDetectedCount: number;
   lastHttpStatus?: number;
+  cookies?: string[];
 }
 
 // In-memory map of active monitors

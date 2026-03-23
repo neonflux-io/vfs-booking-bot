@@ -38,12 +38,43 @@ export function CustomDatePicker({ value, onChange, label, className, withTime =
   }, []);
 
   const renderHeader = () => {
+    const years = Array.from({ length: 121 }, (_, i) => new Date().getFullYear() + 20 - i);
+    const months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+
     return (
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
-        <span className="text-sm font-black uppercase tracking-widest text-foreground">
-          {format(currentMonth, 'MMMM yyyy')}
-        </span>
-        <div className="flex gap-1">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 bg-accent/5">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <select
+            value={currentMonth.getMonth()}
+            onChange={(e) => {
+              const newDate = new Date(currentMonth);
+              newDate.setMonth(parseInt(e.target.value));
+              setCurrentMonth(newDate);
+            }}
+            className="bg-transparent text-[10px] font-black uppercase tracking-widest outline-none cursor-pointer hover:text-primary transition-colors pr-1 max-w-[100px] truncate"
+          >
+            {months.map((m, i) => (
+              <option key={m} value={i} className="bg-card text-foreground py-2">{m}</option>
+            ))}
+          </select>
+          <select
+            value={currentMonth.getFullYear()}
+            onChange={(e) => {
+              const newDate = new Date(currentMonth);
+              newDate.setFullYear(parseInt(e.target.value));
+              setCurrentMonth(newDate);
+            }}
+            className="bg-transparent text-[10px] font-black uppercase tracking-widest outline-none cursor-pointer hover:text-primary transition-colors pr-1"
+          >
+            {years.map(y => (
+              <option key={y} value={y} className="bg-card text-foreground py-2">{y}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex gap-1 flex-shrink-0">
           <button
             type="button"
             onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}

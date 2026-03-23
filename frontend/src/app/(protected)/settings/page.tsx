@@ -156,6 +156,61 @@ function CaptchaSettings({ settings, onSave, saving }: SettingComponentProps) {
   );
 }
 
+function NetworkSettings({ settings, onSave, saving }: SettingComponentProps) {
+  const [local, setLocal] = useState<Record<string, any>>({});
+  const g = settings?.global || {};
+  const v = (k: string) => local[k] !== undefined ? local[k] : g[k];
+  const set = (k: string, val: any) => setLocal((p: any) => ({ ...p, [k]: val }));
+
+  return (
+    <SettingsCard 
+      title="Global Infrastructure Proxy" 
+      description="Apply a system-wide residential proxy to all monitoring units by default."
+      icon={ShieldCheck}
+      onSave={() => onSave(local)}
+      saving={saving}
+      isDirty={Object.keys(local).length > 0}
+    >
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <SettingInput 
+            label="Default Proxy Host" 
+            placeholder="proxy.example.com"
+            value={v('proxyHost') || ''} 
+            onChange={(val: string) => set('proxyHost', val)} 
+          />
+          <SettingNumber 
+            label="Proxy Port" 
+            value={v('proxyPort') || 8080} 
+            onChange={(val: number) => set('proxyPort', val)} 
+          />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
+          <SettingInput 
+            label="Proxy Username (Optional)" 
+            placeholder="user123"
+            value={v('proxyUsername') || ''} 
+            onChange={(val: string) => set('proxyUsername', val)} 
+          />
+          <SettingInput 
+            label="Proxy Password (Optional)" 
+            placeholder="••••••••"
+            type="password"
+            value={v('proxyPassword') || ''} 
+            onChange={(val: string) => set('proxyPassword', val)} 
+          />
+        </div>
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex gap-4 items-start">
+           <Zap className="w-5 h-5 text-amber-500 mt-0.5 shrink-0" />
+           <p className="text-[10px] text-amber-200/70 font-medium leading-relaxed">
+             <strong>Warning:</strong> Global proxy settings will act as a fallback. If a specific monitor has its own proxy configured, the monitor-specific one will take precedence.
+           </p>
+        </div>
+      </div>
+    </SettingsCard>
+  );
+}
+
 function EngineSettings({ settings, onSave, saving }: SettingComponentProps) {
   const [local, setLocal] = useState<Record<string, any>>({});
   const v = (k: string) => local[k] !== undefined ? local[k] : settings?.[k];
@@ -357,6 +412,11 @@ function SettingsContent() {
     onSuccess: () => refetch(),
   });
 
+  const globalMutation = useMutation({
+    mutationFn: (newData: any) => api.post('/settings/global', newData),
+    onSuccess: () => refetch(),
+  });
+
   if (isLoading) {
     return (
        <div className="flex flex-col items-center justify-center py-48 space-y-6">
@@ -369,6 +429,7 @@ function SettingsContent() {
   const tabs = [
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'captcha', label: 'Captcha Solver', icon: Shield },
+    { id: 'network', label: 'Network Proxy', icon: ShieldCheck },
     { id: 'engine', label: 'Agent Mode', icon: Zap },
   ];
 
@@ -439,6 +500,10 @@ function SettingsContent() {
             
             {activeTab === 'captcha' && (
               <CaptchaSettings settings={settings} onSave={handleSave} saving={mutation.isPending} />
+            )}
+
+            {activeTab === 'network' && (
+              <NetworkSettings settings={settings} onSave={(data) => globalMutation.mutate(data)} saving={globalMutation.isPending} />
             )}
 
             {activeTab === 'engine' && (

@@ -26,8 +26,13 @@ interface Profile {
   id: string;
   fullName: string;
   passportNumberMasked: string;
+  dob: string;
+  passportExpiry: string;
+  passportIssueDate?: string;
   nationality: string;
   email: string;
+  phone: string;
+  gender: 'MALE' | 'FEMALE' | 'OTHER';
   priority: 'HIGH' | 'NORMAL';
   isActive: boolean;
   visaType?: string;
@@ -243,15 +248,32 @@ export default function ProfilesPage() {
 
 function ProfileModal({ profile, onClose }: { profile: Profile | null; onClose: () => void }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState({
+  interface FormState {
+    fullName: string;
+    passportNumber: string;
+    dob: string;
+    passportExpiry: string;
+    passportIssueDate: string;
+    nationality: string;
+    email: string;
+    phone: string;
+    gender: 'MALE' | 'FEMALE' | 'OTHER';
+    priority: 'NORMAL' | 'HIGH';
+    vfsPassword: string;
+  }
+
+  const [form, setForm] = useState<FormState>({
     fullName: profile?.fullName ?? '',
     passportNumber: '',
-    dob: '',
-    passportExpiry: '',
+    dob: profile?.dob ?? '',
+    passportExpiry: profile?.passportExpiry ?? '',
+    passportIssueDate: profile?.passportIssueDate ?? '',
     nationality: profile?.nationality ?? '',
     email: profile?.email ?? '',
-    phone: '',
+    phone: profile?.phone ?? '',
+    gender: profile?.gender ?? 'MALE',
     priority: profile?.priority ?? 'NORMAL',
+    vfsPassword: '',
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -261,15 +283,29 @@ function ProfileModal({ profile, onClose }: { profile: Profile | null; onClose: 
     setSaving(true);
     setError('');
     try {
+      // Create a clean payload with sanitized dates
+      const payload: any = {
+        ...form,
+        passportExpiry: form.passportExpiry || undefined,
+        passportIssueDate: form.passportIssueDate || undefined,
+      };
+
+      // Remove falsy optional fields to avoid Zod validation errors on empty strings
+      if (!payload.passportIssueDate) delete payload.passportIssueDate;
+      if (!payload.passportExpiry) delete payload.passportExpiry;
+      
+      // On update, only send passportNumber/vfsPassword if they were changed (not empty)
       if (profile) {
-        await api.put(`/profiles/${profile.id}`, form);
+        if (!form.passportNumber) delete payload.passportNumber;
+        if (!form.vfsPassword) delete payload.vfsPassword;
+        await api.put(`/profiles/${profile.id}`, payload);
       } else {
-        await api.post('/profiles', form);
+        await api.post('/profiles', payload);
       }
       qc.invalidateQueries({ queryKey: ['profiles'] });
       onClose();
     } catch (err: any) {
-      setError(err?.response?.data?.error ?? 'Submission failed');
+      setError(err?.response?.data?.error || err?.response?.data?.message || 'Submission failed');
     } finally {
       setSaving(false);
     }
@@ -290,84 +326,133 @@ function ProfileModal({ profile, onClose }: { profile: Profile | null; onClose: 
         className="absolute inset-0 bg-background/80 backdrop-blur-sm shadow-2xl" 
       />
       <motion.div 
-        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="relative w-full max-w-xl bg-card border shadow-2xl rounded-2xl p-8 overflow-hidden"
+        className="relative w-full max-w-2xl bg-card/60 backdrop-blur-2xl border border-primary/20 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.5)] rounded-[2rem] p-8 overflow-hidden flex flex-col max-h-[92vh]"
       >
-        <div className="absolute top-0 left-0 w-full h-1 bg-primary" />
+        {/* Glow Effects */}
+        <div className="absolute top-0 right-0 w-64 h-64 bg-primary/10 -mr-32 -mt-32 rounded-full blur-[100px]" />
+        <div className="absolute bottom-0 left-0 w-48 h-48 bg-blue-500/5 -ml-24 -mb-24 rounded-full blur-[80px]" />
         
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h2 className="text-xl font-bold tracking-tight">{profile ? 'Update Applicant' : 'New Applicant'}</h2>
-            <p className="text-xs text-muted-foreground mt-1">Configure profile details for automated execution.</p>
+        <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-primary/20 via-primary to-primary/20" />
+        
+        <div className="flex items-center justify-between mb-8 relative z-10">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary border border-primary/20">
+              <User className="w-6 h-6" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-black tracking-tighter text-foreground">{profile ? 'Modify Dossier' : 'New Identity'}</h2>
+              <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-[0.2em]">Acquisition Unit Profile v2.1</p>
+            </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-accent rounded-full transition-colors">
+          <button onClick={onClose} className="w-10 h-10 flex items-center justify-center hover:bg-accent rounded-xl transition-all border border-transparent hover:border-border">
             <X className="w-5 h-5 text-muted-foreground" />
           </button>
         </div>
 
-        {error && (
-          <div className="mb-6 p-4 bg-destructive/10 border border-destructive/20 rounded-xl flex items-center gap-3 text-destructive text-sm">
-            <AlertCircle className="w-4 h-4" />
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="grid grid-cols-2 gap-6">
-            <div className="col-span-2 space-y-2">
-              <label className="text-[10px] uppercase font-black tracking-widest text-muted-foreground pl-1">Full Legal Name</label>
-              <input className="input h-11 bg-accent/20 border-accent focus:bg-background" required {...field('fullName')} />
+        <div className="flex-1 overflow-y-auto p-8 scrollbar-thin scrollbar-thumb-primary/10 hover:scrollbar-thumb-primary/20 relative z-10">
+          <form id="profile-form" onSubmit={handleSubmit} className="space-y-6">
+            {/* Identity Core */}
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <span className="h-px bg-primary/20 flex-1" />
+                <span className="text-[10px] font-black uppercase tracking-[0.3em] text-primary/40 px-4">Identity Core</span>
+                <span className="h-px bg-primary/20 flex-1" />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2 space-y-2">
+                  <label className="text-[10px] uppercase font-black tracking-[0.2em] text-muted-foreground ml-1">Full Legal Name</label>
+                  <input className="input h-12 bg-background/50 border-border/50 focus:border-primary/50 text-sm font-bold transition-all shadow-inner px-5 rounded-xl" required {...field('fullName')} placeholder="Jules Verne" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase font-black tracking-[0.2em] text-muted-foreground ml-1">Passport Identifier</label>
+                  <input className="input h-12 bg-background/50 border-border/50 focus:border-primary/50 text-xs font-mono tracking-widest transition-all shadow-inner px-5 rounded-xl" required={!profile} {...field('passportNumber')} placeholder={profile ? '••••••••' : 'A1234567'} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase font-black tracking-[0.2em] text-muted-foreground ml-1">Nationality</label>
+                  <input className="input h-12 bg-background/50 border-border/50 focus:border-primary/50 text-xs font-bold transition-all shadow-inner px-5 rounded-xl" required {...field('nationality')} placeholder="e.g. United Kingdom" />
+                </div>
+                <CustomDatePicker label="Date of Birth" value={form.dob} onChange={(val) => setForm(f => ({ ...f, dob: val }))} withTime={false} />
+                <CustomSelect 
+                  label="Biological Gender" 
+                  value={form.gender} 
+                  onChange={(val) => setForm(f => ({ ...f, gender: val as any }))}
+                  options={[{ value: 'MALE', label: 'Male' }, { value: 'FEMALE', label: 'Female' }, { value: 'OTHER', label: 'Other' }]}
+                />
+              </div>
             </div>
-            
-            <div className="space-y-2">
-              <label className="text-[10px] uppercase font-black tracking-widest text-muted-foreground pl-1">Passport Number</label>
-              <input className="input h-11 bg-accent/20 border-accent" required={!profile} {...field('passportNumber')} placeholder={profile ? '••••••••' : ''} />
+
+            {/* Lifecycle Timeline */}
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <span className="h-px bg-primary/20 flex-1" />
+                <span className="text-[10px] font-black uppercase tracking-[0.3em] text-primary/40 px-4">Lifecycle Timeline</span>
+                <span className="h-px bg-primary/20 flex-1" />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <CustomDatePicker label="Passport Issue Date" value={form.passportIssueDate} onChange={(val) => setForm(f => ({ ...f, passportIssueDate: val }))} withTime={false} />
+                <CustomDatePicker label="Passport Expiry" value={form.passportExpiry} onChange={(val) => setForm(f => ({ ...f, passportExpiry: val }))} withTime={false} />
+              </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-[10px] uppercase font-black tracking-widest text-muted-foreground pl-1">Nationality</label>
-              <input className="input h-11 bg-accent/20 border-accent" required {...field('nationality')} />
+            {/* Contact Intelligence */}
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <span className="h-px bg-primary/20 flex-1" />
+                <span className="text-[10px] font-black uppercase tracking-[0.3em] text-primary/40 px-4">Contact Intelligence</span>
+                <span className="h-px bg-primary/20 flex-1" />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase font-black tracking-[0.2em] text-muted-foreground ml-1">Email Address</label>
+                  <input type="email" className="input h-12 bg-background/50 border-border/50 focus:border-primary/50 text-xs font-bold transition-all shadow-inner px-5 rounded-xl" required {...field('email')} placeholder="email@example.com" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase font-black tracking-[0.2em] text-muted-foreground ml-1">Phone Number</label>
+                  <input type="tel" className="input h-12 bg-background/50 border-border/50 focus:border-primary/50 text-xs font-bold transition-all shadow-inner px-5 rounded-xl" required {...field('phone')} placeholder="+..." />
+                </div>
+                <div className="md:col-span-2 space-y-2">
+                  <label className="text-[10px] uppercase font-black tracking-[0.2em] text-muted-foreground ml-1">VFS Portal Password</label>
+                  <input type="password" className="input h-12 bg-background/50 border-border/50 focus:border-primary/50 text-xs font-bold transition-all shadow-inner px-5 rounded-xl" required={!profile} {...field('vfsPassword')} placeholder={profile ? '••••••••' : 'Enter portal password'} />
+                </div>
+              </div>
             </div>
 
-            <CustomDatePicker
-              label="Date of Birth"
-              value={form.dob}
-              onChange={(val) => setForm(f => ({ ...f, dob: val }))}
-              withTime={false}
-            />
-
-            <CustomDatePicker
-              label="Passport Expiry"
-              value={form.passportExpiry}
-              onChange={(val) => setForm(f => ({ ...f, passportExpiry: val }))}
-              withTime={false}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-[10px] uppercase font-black tracking-widest text-muted-foreground pl-1">Email Address</label>
-              <input type="email" className="input h-11 bg-accent/20 border-accent" required {...field('email')} />
+            <div className="pt-2">
+              <CustomSelect
+                label="Acquisition Priority"
+                value={form.priority}
+                onChange={(val) => setForm(f => ({ ...f, priority: val as any }))}
+                options={[
+                  { value: 'NORMAL', label: 'Balanced Mode (Standard)' },
+                  { value: 'HIGH', label: 'Turbo Acquisition (High Priority)' },
+                ]}
+              />
             </div>
-            <CustomSelect
-              label="Priority Level"
-              value={form.priority}
-              onChange={(val) => setForm(f => ({ ...f, priority: val as any }))}
-              options={[
-                { value: 'NORMAL', label: 'Standard Priority' },
-                { value: 'HIGH', label: 'High Priority (Fast Lane)' },
-              ]}
-            />
-          </div>
+          </form>
+        </div>
 
-          <div className="flex gap-3 pt-4">
-            <button type="button" className="flex-1 btn-secondary h-11" onClick={onClose}>Discard</button>
-            <button type="submit" className="flex-1 btn-primary h-11 shadow-lg shadow-primary/20" disabled={saving}>
-              {saving ? 'Processing...' : 'Save Profile'}
-            </button>
-          </div>
-        </form>
+        {/* Action Footer */}
+        <div className="p-8 border-t border-border bg-card/50 backdrop-blur-md flex gap-4 z-20">
+          <button 
+            type="button" 
+            className="flex-1 h-12 rounded-xl text-[10px] font-black uppercase tracking-widest text-muted-foreground hover:bg-accent hover:text-foreground transition-all border border-border/50" 
+            onClick={onClose}
+          >
+            Discard
+          </button>
+          <button 
+            type="submit"
+            form="profile-form"
+            className="flex-[2] btn-primary h-12 rounded-xl shadow-[0_10px_30px_-5px_rgba(var(--primary-rgb),0.3)] text-[10px] font-black tracking-[0.2em] uppercase transition-all hover:scale-[1.02] active:scale-[0.98]" 
+            disabled={saving}
+          >
+            {saving ? (
+              <div className="w-5 h-5 border-2 border-primary-foreground border-t-transparent animate-spin rounded-full mx-auto" />
+            ) : profile ? 'Confirm Changes' : 'Initialize Identity'}
+          </button>
+        </div>
       </motion.div>
     </div>
   );

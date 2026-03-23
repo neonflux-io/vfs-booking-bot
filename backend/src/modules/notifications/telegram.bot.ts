@@ -1,9 +1,20 @@
 import { Telegraf, Context } from 'telegraf';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { env } from '@config/env';
 import { getMonitorStatus, stopMonitor } from '@modules/monitor/monitor.service';
 import { getProfiles } from '@modules/profiles/profiles.service';
 import { logEvent } from '@modules/logs/logger';
 import { EventType } from '@prisma/client';
+
+const escapeHTML = (str: string) => {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+};
 
 let bot: Telegraf | null = null;
 
@@ -13,7 +24,10 @@ export function initTelegramBot(): Telegraf | null {
     return null;
   }
 
-  bot = new Telegraf(env.TELEGRAM_BOT_TOKEN);
+  const agent = env.TELEGRAM_PROXY ? new HttpsProxyAgent(env.TELEGRAM_PROXY) : undefined;
+  bot = new Telegraf(env.TELEGRAM_BOT_TOKEN, {
+    telegram: { agent }
+  });
 
   // ── Authentication Middleware ──────────────────────────────────────────────
   bot.use(async (ctx: Context, next: () => Promise<void>) => {
@@ -30,23 +44,23 @@ export function initTelegramBot(): Telegraf | null {
 
   bot.start((ctx: Context) => {
     ctx.reply(
-      '🤖 *VFS Booking Bot Online*\n\n' +
+      '🤖 <b>VFS Booking Bot Online</b>\n\n' +
       'Commands:\n' +
       '/status - Check active monitors\n' +
       '/profiles - List applicant profiles\n' +
       '/stop_all - Stop all active monitors\n' +
       '/help - Show this message',
-      { parse_mode: 'Markdown' }
+      { parse_mode: 'HTML' }
     );
   });
 
   bot.help((ctx: Context) => {
     ctx.reply(
-      '📖 *Help & Commands*\n\n' +
+      '📖 <b>Help & Commands</b>\n\n' +
       '/status - Show real-time monitoring status\n' +
       '/profiles - List all active applicant profiles\n' +
       '/stop_all - Emergency stop for all monitors\n',
-      { parse_mode: 'Markdown' }
+      { parse_mode: 'HTML' }
     );
   });
 
@@ -57,16 +71,17 @@ export function initTelegramBot(): Telegraf | null {
     }
 
     const message = statuses
-      .map((s) => 
-        `📍 *${s.destination.toUpperCase()}* (${s.visaType})\n` +
+      .map((s: any) => 
+        `📍 <b>[${escapeHTML(s.sourceCountry?.toUpperCase()) || '??'} → ${escapeHTML(s.destination?.toUpperCase())}]</b>\n` +
+        `   Visa: <code>${escapeHTML(s.visaType)}</code>\n` +
         `   Status: ${s.isRunning ? '🟢 Running' : '🔴 Stopped'}\n` +
-        `   Mode: ${s.mode}\n` +
+        `   Mode: ${escapeHTML(s.mode)}\n` +
         `   Slots Found: ${s.slotDetectedCount}\n` +
         `   Last Sync: ${s.lastCheckedAt ? new Date(s.lastCheckedAt).toLocaleTimeString() : 'Never'}`
       )
       .join('\n\n');
 
-    ctx.reply(`📊 *Current Status*\n\n${message}`, { parse_mode: 'Markdown' });
+    ctx.reply(`📊 <b>Current Status</b>\n\n${message}`, { parse_mode: 'HTML' });
   });
 
   bot.command('profiles', async (ctx: Context) => {
@@ -78,12 +93,12 @@ export function initTelegramBot(): Telegraf | null {
 
       const message = items
         .map((p: any) => 
-          `👤 *${p.fullName}*\n` +
-          `   Passport: \`${p.passportNumberMasked}\`\n` +
-          `   Priority: ${p.priority}`
+          `👤 <b>${escapeHTML(p.fullName)}</b>\n` +
+          `   Passport: <code>${escapeHTML(p.passportNumberMasked)}</code>\n` +
+          `   Priority: ${escapeHTML(p.priority)}`
         )
         .join('\n\n');
-      ctx.reply(`📋 *Applicant Profiles*\n\n${message}`, { parse_mode: 'Markdown' });
+      ctx.reply(`📋 <b>Applicant Profiles</b>\n\n${message}`, { parse_mode: 'HTML' });
     } catch (err) {
       ctx.reply('❌ Error fetching profiles.');
     }
@@ -99,15 +114,24 @@ export function initTelegramBot(): Telegraf | null {
       } catch (e) { /* ignore */ }
     }
 
-    ctx.reply('🔒 *All monitors stopped.*');
+    ctx.reply('🔒 <b>All monitors stopped.</b>', { parse_mode: 'HTML' });
     logEvent('warn', EventType.MONITOR_STOPPED, 'All monitors stopped via Telegram command');
   });
 
   // ── Launch ─────────────────────────────────────────────────────────────────
 
-  bot.launch()
-    .then(() => console.info('✅ Telegram bot interface started'))
-    .catch((err: Error) => console.error('❌ Failed to start Telegram bot:', err));
+  const launchWithRetry = async (attempts = 0) => {
+    try {
+      await bot?.launch();
+      console.info('✅ Telegram bot interface started');
+    } catch (err: any) {
+      const delay = Math.min(1000 * Math.pow(2, attempts), 30000); // Exponential backoff
+      console.error(`❌ Failed to launch Telegram bot: ${err.message}. Retrying in ${delay/1000}s...`);
+      setTimeout(() => launchWithRetry(attempts + 1), delay);
+    }
+  };
+
+  launchWithRetry();
 
   // Enable graceful stop
   process.once('SIGINT', () => bot?.stop('SIGINT'));
@@ -124,7 +148,7 @@ export function getBotInstance(): Telegraf | null {
 export async function sendTelegram(message: string): Promise<void> {
   if (!bot || !env.TELEGRAM_CHAT_ID) return;
   try {
-    await bot.telegram.sendMessage(env.TELEGRAM_CHAT_ID, message, { parse_mode: 'Markdown' });
+    await bot.telegram.sendMessage(env.TELEGRAM_CHAT_ID, message, { parse_mode: 'HTML' });
   } catch (err: unknown) {
     console.error('Failed to send Telegram notification:', err);
   }
