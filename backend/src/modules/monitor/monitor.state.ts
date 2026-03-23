@@ -12,6 +12,12 @@ export interface MonitorConfig {
     username?: string;
     password?: string;
   };
+  // Opt 1: when true, proxy is used only for browser warm — HTTP GET/POST go direct
+  proxyForWarmOnly?: boolean;
+  // Opt 3: time-gating — polling slows outside active hours and pauses during maintenance
+  activeHoursUtc?: { startHour: number; endHour: number };
+  maintenanceWindowUtc?: { startHour: number; endHour: number };
+  offHoursIntervalMs?: number;
 }
 
 export interface MonitorState {
@@ -23,7 +29,8 @@ export interface MonitorState {
   slotDetectedCount: number;
   lastHttpStatus?: number;
   cookies?: string[];
-  cookiesSetAt?: Date;   // timestamp of last cookie refresh — used for 28-min TTL
+  cookiesSetAt?: Date;   // timestamp when cookies were last refreshed (observability)
+  cookiesValid?: boolean; // Opt 2: false = invalidated by 401/403, triggers re-warm
   userAgent?: string;
   secChUa?: string;
   earlySlotData?: any;   // set by warming browser when in-session fetch succeeds

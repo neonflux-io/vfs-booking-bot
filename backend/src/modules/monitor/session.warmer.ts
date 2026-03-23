@@ -177,6 +177,7 @@ export async function warmSessionWithBrowser(
       viewport: { width: 1280, height: 720 },
       deviceScaleFactor: 1,
       locale: 'en-GB',
+      ignoreHTTPSErrors: true,
       extraHTTPHeaders: {
         'sec-ch-ua': CHDR,
         'sec-ch-ua-mobile': '?0',

@@ -3,7 +3,10 @@ import { startMonitor, stopMonitor, getMonitorStatus } from './monitor.service';
 
 export function startMonitorHandler(req: Request, res: Response, next: NextFunction) {
   try {
-    const { sourceCountry, destination, visaType, intervalMs, profileIds, mode, proxy } = req.body;
+    const {
+      sourceCountry, destination, visaType, intervalMs, profileIds, mode, proxy,
+      proxyForWarmOnly, activeHoursUtc, maintenanceWindowUtc, offHoursIntervalMs,
+    } = req.body;
     const id = startMonitor({
       sourceCountry: sourceCountry || 'angola',
       destination,
@@ -12,6 +15,10 @@ export function startMonitorHandler(req: Request, res: Response, next: NextFunct
       profileIds: profileIds ?? [],
       mode: mode ?? 'auto',
       proxy: proxy ?? undefined,
+      proxyForWarmOnly: proxyForWarmOnly ?? true, // Opt 1: default on — proxy warm only
+      activeHoursUtc: activeHoursUtc ?? { startHour: 7, endHour: 16 },       // 07–16 UTC
+      maintenanceWindowUtc: maintenanceWindowUtc ?? { startHour: 0, endHour: 6 }, // 00–06 UTC
+      offHoursIntervalMs: offHoursIntervalMs ?? 300_000, // 5 min outside active hours
     });
     res.json({ monitorId: id, message: 'Monitor started' });
   } catch (err) { next(err); }

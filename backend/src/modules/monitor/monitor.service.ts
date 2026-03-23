@@ -1,4 +1,5 @@
 import axios from 'axios';
+import https from 'https';
 import { v4 as uuidv4 } from 'uuid';
 import { MonitorConfig, MonitorState, setMonitor, getMonitor, deleteMonitor, getAllMonitors } from './monitor.state';
 import { enqueueBooking } from '@modules/booking/booking.service';
@@ -13,6 +14,7 @@ import { AppError } from '@middleware/errorHandler';
 import { prisma } from '@config/database';
 import { warmSessionWithBrowser, fetchSlotsWithBrowser, VfsCredentials } from './session.warmer';
 import { decrypt } from '@utils/crypto';
+import { getCachedSlots, setCachedSlots } from './slot.cache';
 
 // VFS Global availability endpoint (discovered via DevTools network capture)
 // NOTE: This URL/params may change — update via vfs.selectors Settings if needed
@@ -73,6 +75,7 @@ function slotKey(slot: SlotInfo): string {
   return `${slot.date}:${slot.time}`;
 }
 
+// Returns proxy config for browser warm sessions (always uses residential proxy)
 async function getProxyConfig(id: string) {
   const current = getMonitor(id);
   const monitorProxy = current?.config?.proxy;
@@ -102,6 +105,14 @@ async function getProxyConfig(id: string) {
   }
 
   return false;
+}
+
+// Opt 1: Returns proxy config for regular HTTP GET/POST calls.
+// When proxyForWarmOnly=true, returns undefined so axios goes direct (no proxy cost).
+async function getHttpProxyConfig(id: string) {
+  const current = getMonitor(id);
+  if (current?.config?.proxyForWarmOnly) return undefined;
+  return getProxyConfig(id);
 }
 
 async function rotateProxy(id: string) {
@@ -155,22 +166,24 @@ async function rotateProxy(id: string) {
 }
 
 
-const COOKIE_TTL_MS = 28 * 60 * 1000; // 28 minutes — VFS session expires ~30 min
+// Opt 2: Cookies are reused until VFS rejects them (lazy expiry).
+// Hard 4-hour ceiling prevents silently stale tokens.
+const MAX_COOKIE_AGE_MS = 4 * 60 * 60 * 1000;
 
 async function warmSession(id: string, sourceCode: string, destinationCode: string, visaType: string, credentials?: VfsCredentials): Promise<string[] | undefined> {
   const current = getMonitor(id);
   if (current?.cookies?.length) {
-    const age = current.cookiesSetAt
-      ? Date.now() - current.cookiesSetAt.getTime()
-      : COOKIE_TTL_MS + 1;
-    if (age < COOKIE_TTL_MS) return current.cookies; // still fresh
+    const age = current.cookiesSetAt ? Date.now() - current.cookiesSetAt.getTime() : 0;
+    if (current.cookiesValid !== false && age < MAX_COOKIE_AGE_MS) {
+      return current.cookies; // still valid — skip re-warm
+    }
     logEvent('info', EventType.MONITOR_STARTED,
-      `Cookies expired for monitor ${id.slice(0, 4)}… — re-warming session.`);
+      `Cookies invalidated for monitor ${id.slice(0, 4)}… — re-warming session.`);
   }
 
   try {
     const url = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
-    const proxyConfig = await getProxyConfig(id);
+    const httpProxy = await getProxyConfig(id); // warm GET always uses proxy (datacenter IPs are blocked for page loads)
     const agent = getRandomAgent();
     const response = await axios.get(url, {
       timeout: 15_000,
@@ -190,7 +203,8 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
         'sec-ch-ua-mobile': '?0',
         'sec-ch-ua-platform': '"Windows"',
       },
-      proxy: proxyConfig,
+      proxy: httpProxy || undefined,
+      ...(httpProxy && { httpsAgent: new https.Agent({ rejectUnauthorized: false }) }),
     });
 
     const cookies = response.headers['set-cookie'];
@@ -200,6 +214,7 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
         ...latest!,
         cookies,
         cookiesSetAt: new Date(),
+        cookiesValid: true, // Opt 2: mark fresh
         userAgent: agent.ua,
         secChUa: agent.ch,
         lastHttpStatus: 200
@@ -223,6 +238,7 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
           ...latest!,
           cookies: browserResult.cookies,
           cookiesSetAt: new Date(),
+          cookiesValid: true, // Opt 2: browser warm produced fresh cookies
           userAgent: browserResult.userAgent,
           secChUa: browserResult.secChUa,
           lastHttpStatus: 200,
@@ -299,7 +315,7 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
       country: sourceCode.toUpperCase(),
     };
 
-    const proxyConfig = await getProxyConfig(config.id);
+    const proxyConfig = await getHttpProxyConfig(config.id); // Opt 1: direct if proxyForWarmOnly
     const agent = monitorState.userAgent && monitorState.secChUa
       ? { ua: monitorState.userAgent, ch: monitorState.secChUa }
       : getRandomAgent();
@@ -330,14 +346,21 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
           'sec-fetch-mode': 'cors',
           'sec-fetch-site': 'same-origin',
         },
-        proxy: proxyConfig,
+        proxy: proxyConfig || undefined,
+        ...(proxyConfig && { httpsAgent: new https.Agent({ rejectUnauthorized: false }) }),
       });
       data = response.data;
     } catch (err: any) {
       const status = err.response?.status;
       const latest = getMonitor(config.id);
-      if (latest) setMonitor(config.id, { ...latest, lastHttpStatus: status || 500 });
-      
+
+      // Opt 2: invalidate cookies on auth failure so warmSession re-warms next poll
+      if ((status === 401 || status === 403) && latest) {
+        setMonitor(config.id, { ...latest, lastHttpStatus: status, cookiesValid: false });
+      } else if (latest) {
+        setMonitor(config.id, { ...latest, lastHttpStatus: status || 500 });
+      }
+
       if (status === 403) {
         logEvent('warn', EventType.BOOKING_FAILED, `Fetch slots blocked (403). Switching to Ultimate Bypass (Browser Fetch)...`);
         const proxyConfig = await getProxyConfig(config.id);
@@ -457,8 +480,38 @@ function isInActiveWindow(): boolean {
   return ACTIVE_WINDOWS.some((w) => hour >= w.startHour && hour < w.endHour);
 }
 
-function adaptiveInterval(baseMs: number, consecutiveEmptyPolls: number, justDetected: boolean): number {
+function adaptiveInterval(
+  baseMs: number,
+  consecutiveEmptyPolls: number,
+  justDetected: boolean,
+  opts?: {
+    activeHoursUtc?: { startHour: number; endHour: number };
+    maintenanceWindowUtc?: { startHour: number; endHour: number };
+    offHoursIntervalMs?: number;
+  },
+): number {
   let delay = baseMs;
+
+  // Opt 3: time-gating — always let slot detections burst through regardless of hour
+  if (!justDetected && opts) {
+    const utcHour = new Date().getUTCHours();
+
+    // Maintenance window: VFS is down — poll every 10 min to wake up when it's back
+    if (opts.maintenanceWindowUtc) {
+      const { startHour, endHour } = opts.maintenanceWindowUtc;
+      if (utcHour >= startHour && utcHour < endHour) {
+        return 10 * 60_000; // 10 minutes
+      }
+    }
+
+    // Outside active hours: slow to off-hours interval
+    if (opts.activeHoursUtc) {
+      const { startHour, endHour } = opts.activeHoursUtc;
+      if (!(utcHour >= startHour && utcHour < endHour)) {
+        return opts.offHoursIntervalMs ?? 300_000; // default 5 minutes
+      }
+    }
+  }
 
   if (justDetected) {
     delay = HIGH_DEMAND_MS;
@@ -513,7 +566,12 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
     let justDetected = false;
 
     try {
-      const slots = await fetchAvailableSlots(fullConfig);
+      // Opt 4: coalesce — share one fetch across monitors on the same route
+      const coalesceKey = `${getSourceCode(fullConfig.sourceCountry)}:${getDestinationCode(fullConfig.destination)}:${fullConfig.visaType}`;
+      const cachedPromise = getCachedSlots(coalesceKey);
+      const slotsPromise = cachedPromise ?? fetchAvailableSlots(fullConfig);
+      if (!cachedPromise) setCachedSlots(coalesceKey, slotsPromise);
+      const slots = await slotsPromise;
       
       // Fetch LATEST state again to avoid overwriting changes made during fetch
       const latest = getMonitor(id);
@@ -575,7 +633,11 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
     }
 
     // Schedule next poll with adaptive delay
-    let nextDelay = adaptiveInterval(fullConfig.intervalMs, consecutiveEmptyPolls, justDetected);
+    let nextDelay = adaptiveInterval(fullConfig.intervalMs, consecutiveEmptyPolls, justDetected, {
+      activeHoursUtc: fullConfig.activeHoursUtc,
+      maintenanceWindowUtc: fullConfig.maintenanceWindowUtc,
+      offHoursIntervalMs: fullConfig.offHoursIntervalMs,
+    });
 
     // Re-fetch latest monitor state to avoid race conditions with 403 status
     const latestState = getMonitor(id);
