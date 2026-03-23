@@ -25,6 +25,7 @@ export interface MonitorState {
   cookies?: string[];
   userAgent?: string;
   secChUa?: string;
+  earlySlotData?: any;   // set by warming browser when in-session fetch succeeds
 }
 
 // In-memory map of active monitors

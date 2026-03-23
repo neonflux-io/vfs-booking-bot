@@ -21,7 +21,7 @@ export async function warmSessionWithBrowser(
   sourceCode: string,
   destinationCode: string,
   proxy?: { host: string; port: number; auth?: { username: string; password?: string } }
-): Promise<{ cookies: string[]; userAgent: string; secChUa: string } | undefined> {
+): Promise<{ cookies: string[]; userAgent: string; secChUa: string; slotData?: any } | undefined> {
   const url = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
   
   logEvent('info', EventType.MONITOR_STARTED, `Launching ultra-stealth browser to bypass 403 on ${destinationCode}...`);
@@ -81,17 +81,66 @@ export async function warmSessionWithBrowser(
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
 
-    // Navigate and wait for some key indication that the page loaded (and cookies set)
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+    // Navigate and wait for cookies to be set
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     
-    // Optional: wait a bit more for background JS (Cloudflare challenges)
-    await page.waitForTimeout(5000);
+    // Passive listener — catch any natural get-slots call on page load
+    let passiveSlotsData: any = null;
+    page.on('response', async (response: any) => {
+      if (response.url().includes('get-slots') && response.status() === 200) {
+        try {
+          passiveSlotsData = await response.json();
+          logEvent('info', EventType.MONITOR_STARTED, `[Warming] Passively captured get-slots for ${destinationCode}!`);
+        } catch {}
+      }
+    });
+
+    // Wait for Angular + auto API calls
+    await page.waitForTimeout(8000);
 
     const cookies = await context.cookies();
     const cookieStrings = cookies.map(c => `${c.name}=${c.value}`);
 
     if (cookieStrings.length > 0) {
       logEvent('info', EventType.MONITOR_STARTED, `Successfully acquired warmed cookies for ${destinationCode}.`);
+
+      // If we passively captured slots already, return them
+      if (passiveSlotsData) {
+        return { cookies: cookieStrings, userAgent, secChUa, slotData: passiveSlotsData };
+      }
+
+      // Try to fetch slots using the LIVE XSRF-TOKEN from this same session
+      const xsrfCookie = cookies.find(c => c.name === 'XSRF-TOKEN');
+      if (xsrfCookie) {
+        const xsrfToken = decodeURIComponent(xsrfCookie.value);
+        const slotsUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment/get-slots`;
+        logEvent('info', EventType.MONITOR_STARTED, `[Warming] XSRF-TOKEN found. Attempting in-session slot fetch for ${destinationCode}...`);
+        try {
+          const slotData = await page.evaluate(
+            async ({ url, token, src, vCategory }: { url: string; token: string; src: string; vCategory: string }) => {
+              const res = await fetch(url, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Accept': 'application/json, text/plain, */*',
+                  'X-XSRF-TOKEN': token,
+                  'Referer': window.location.href,
+                  'Origin': 'https://visa.vfsglobal.com',
+                },
+                credentials: 'include',
+                body: JSON.stringify({ visaCategory: vCategory, country: src.toUpperCase() }),
+              });
+              if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+              return res.json();
+            },
+            { url: slotsUrl, token: xsrfToken, src: sourceCode, vCategory: destinationCode }
+          );
+          return { cookies: cookieStrings, userAgent, secChUa, slotData };
+        } catch (fetchErr: any) {
+          logEvent('warn', EventType.BOOKING_FAILED, `[Warming] In-session slot fetch failed: ${fetchErr.message}`);
+        }
+      }
+
       return { cookies: cookieStrings, userAgent, secChUa };
     }
   } catch (err: any) {
@@ -108,12 +157,12 @@ export async function fetchSlotsWithBrowser(
   destCode: string,
   visaCategory: string,
   proxy?: { host: string; port: number; auth?: { username: string; password?: string } },
-  cookies?: string[]
+  _cookies?: string[] // retained for API compatibility, not used in Phase 15
 ): Promise<any> {
   const baseUrl = `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment`;
   const slotsApiUrl = `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment/get-slots`;
   
-  logEvent('info', EventType.MONITOR_STARTED, `Executing Phase 14 Passive Interception for ${destCode}...`);
+  logEvent('info', EventType.MONITOR_STARTED, `Phase 15: Single-Session fetch for ${destCode}...`);
 
   let browser;
   try {
@@ -148,23 +197,12 @@ export async function fetchSlotsWithBrowser(
       }),
     });
 
-    // Inject warmed cookies
-    if (cookies && cookies.length > 0) {
-      const playwrightCookies = cookies.map((c: string) => {
-        const equalsIdx = c.indexOf('=');
-        const name = c.substring(0, equalsIdx).trim();
-        const value = c.substring(equalsIdx + 1).split(';')[0].trim();
-        return { name, value, domain: 'visa.vfsglobal.com', path: '/' };
-      });
-      await context.addCookies(playwrightCookies);
-    }
-
     const page = await context.newPage();
 
     // RESOURCE OPTIMIZATION
     await page.route('**/*', (route: any) => {
       const reqUrl = route.request().url().toLowerCase();
-      const isMedia = reqUrl.match(/\.(png|jpg|jpeg|gif|svg|woff|woff2)$/);
+      const isMedia = reqUrl.match(/\.(png|jpg|jpeg|gif|svg|woff|woff2|mp4)$/);
       const isAd = BLOCK_LIST.some((ad: string) => reqUrl.includes(ad));
       if (isMedia || isAd) return route.abort();
       return route.continue();
@@ -174,59 +212,63 @@ export async function fetchSlotsWithBrowser(
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
 
-    // STRATEGY A: Set up passive listener BEFORE navigation to catch any natural get-slots call
+    // STRATEGY A — Passive listener: catch natural get-slots from Angular
     let passiveSlotsData: any = null;
     page.on('response', async (response: any) => {
       if (response.url().includes('get-slots') && response.status() === 200) {
         try {
           passiveSlotsData = await response.json();
-          logEvent('info', EventType.MONITOR_STARTED, `Passively captured get-slots for ${destCode}!`);
+          logEvent('info', EventType.MONITOR_STARTED, `[Phase 15] Passively captured get-slots for ${destCode}!`);
         } catch {}
       }
     });
 
-    // Navigate and give Angular time to boot
+    // Navigate — domcontentloaded is faster and enough for Angular to start
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await page.waitForTimeout(8000); // Wait for Angular + auto API calls
+    await page.waitForTimeout(8000); // Let Angular boot and fire API calls
 
-    if (passiveSlotsData) {
-      return passiveSlotsData;
+    if (passiveSlotsData) return passiveSlotsData;
+
+    // STRATEGY B — Read XSRF token from LIVE context (not document.cookie, bypasses HttpOnly)
+    logEvent('info', EventType.MONITOR_STARTED, `[Phase 15] No passive capture. Extracting live XSRF-TOKEN...`);
+
+    const liveCookies = await context.cookies();
+    const xsrfCookie = liveCookies.find(c => c.name === 'XSRF-TOKEN');
+    const xsrfToken = xsrfCookie ? decodeURIComponent(xsrfCookie.value) : '';
+
+    if (!xsrfToken) {
+      throw new Error('XSRF-TOKEN not found in live browser session. Page may not have loaded Angular properly.');
     }
 
-    // STRATEGY B: Direct browser-context fetch with extracted XSRF token
-    logEvent('info', EventType.MONITOR_STARTED, `No passive capture. Trying direct in-browser fetch for ${destCode}...`);
-    
-    const result = await page.evaluate(async ({ slotsUrl, vCategory }: { slotsUrl: string, vCategory: string }) => {
-      // Get XSRF token from cookies
-      const xsrf = document.cookie.split(';')
-        .map(c => c.trim())
-        .find(c => c.startsWith('XSRF-TOKEN='))
-        ?.split('=').slice(1).join('=') || '';
+    logEvent('info', EventType.MONITOR_STARTED, `[Phase 15] XSRF-TOKEN acquired. Making direct page fetch for ${destCode}...`);
 
-      const res = await fetch(slotsUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json, text/plain, */*',
-          'X-XSRF-TOKEN': decodeURIComponent(xsrf),
-          'Referer': window.location.href,
-          'Origin': 'https://visa.vfsglobal.com',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ 
-          visaCategoryCode: vCategory,
-          countryCode: window.location.pathname.split('/')[1]?.toUpperCase() || '',
-        }),
-      });
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-      return res.json();
-    }, { slotsUrl: slotsApiUrl, vCategory: visaCategory });
+    const result = await page.evaluate(
+      async ({ url, token, src, vCategory }: { url: string; token: string; src: string; vCategory: string }) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/plain, */*',
+            'X-XSRF-TOKEN': token,
+            'Referer': window.location.href,
+            'Origin': 'https://visa.vfsglobal.com',
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            visaCategory: vCategory,
+            country: src.toUpperCase(),
+          }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        return res.json();
+      },
+      { url: slotsApiUrl, token: xsrfToken, src: sourceCode, vCategory: visaCategory }
+    );
 
     return result;
 
   } catch (err: any) {
-    logEvent('error', EventType.BOOKING_FAILED, `Phase 14 bypass failed: ${err.message}`);
+    logEvent('error', EventType.BOOKING_FAILED, `Phase 15 bypass failed: ${err.message}`);
     throw err;
   } finally {
     if (browser) await browser.close();

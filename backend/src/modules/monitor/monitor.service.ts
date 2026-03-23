@@ -202,7 +202,7 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
     logEvent('warn', EventType.BOOKING_FAILED, `Failed to warm session for ${destinationCode}: ${(err as Error).message}${status ? ` (Status: ${status})` : ''}`);
     
     if (status === 403) {
-      // PRO-UPGRADE: Try browser-based warming on 403
+      // Phase 16: Try browser-based warming + in-session slot fetch
       const proxyConfig = await getProxyConfig(id);
       const browserResult = await warmSessionWithBrowser(id, sourceCode, destinationCode, proxyConfig as any);
       if (browserResult) {
@@ -211,7 +211,8 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
           cookies: browserResult.cookies, 
           userAgent: browserResult.userAgent,
           secChUa: browserResult.secChUa,
-          lastHttpStatus: 200 
+          lastHttpStatus: 200,
+          earlySlotData: browserResult.slotData ?? null,
         });
         return browserResult.cookies;
       }
@@ -231,6 +232,25 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
     
     const monitorState = getMonitor(config.id); 
     if (!monitorState) throw new Error(`Monitor ${config.id} not found during slot fetch.`);
+
+    // Phase 16: If the warming browser already fetched slots in-session, use that data directly
+    if (monitorState.earlySlotData) {
+      logEvent('info', EventType.MONITOR_STARTED, `Using in-session slot data for ${destCode} (Phase 16 fast-path).`);
+      const earlyData = monitorState.earlySlotData;
+      setMonitor(config.id, { ...monitorState, earlySlotData: undefined });
+
+      // Parse VFS response using same multi-shape logic as main fetch
+      let earlyRaw: Array<{ date?: string; slotDate?: string; time?: string; slotTime?: string }> = [];
+      if (Array.isArray(earlyData)) earlyRaw = earlyData;
+      else if (Array.isArray(earlyData?.slots)) earlyRaw = earlyData.slots;
+      else if (Array.isArray(earlyData?.data?.slots)) earlyRaw = earlyData.data.slots;
+      else if (Array.isArray(earlyData?.data)) earlyRaw = earlyData.data;
+      else if (Array.isArray(earlyData?.availableSlots)) earlyRaw = earlyData.availableSlots;
+
+      return earlyRaw
+        .map((s) => ({ date: s.date ?? s.slotDate ?? '', time: s.time ?? s.slotTime ?? '', destination: config.destination, visaType: config.visaType }))
+        .filter((s) => s.date && s.time);
+    }
 
     const payload = {
       visaCategory: config.visaType,
