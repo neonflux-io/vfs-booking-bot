@@ -23,6 +23,10 @@ const envSchema = z.object({
   CAPTCHA_SOLVER: z.enum(['twocaptcha', 'manual']).default('manual'),
 
   PROXY_DEFAULT_PROVIDER: z.string().default('brightdata'),
+  PROXY_HOST: z.string().optional(),
+  PROXY_PORT: z.coerce.number().optional(),
+  PROXY_USERNAME: z.string().optional(),
+  PROXY_PASSWORD: z.string().optional(),
 
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),

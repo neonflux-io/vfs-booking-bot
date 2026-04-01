@@ -91,7 +91,7 @@ async function getProxyConfig(id: string) {
     };
   }
 
-  // Fallback to Global Proxy
+  // Fallback to Global Proxy from DB
   const global = await prisma.globalSettings.findUnique({ where: { id: 'singleton' } });
   if (global?.proxyHost) {
     return {
@@ -100,6 +100,18 @@ async function getProxyConfig(id: string) {
       auth: global.proxyUsername ? {
         username: global.proxyUsername,
         password: global.proxyPassword || '',
+      } : undefined,
+    };
+  }
+
+  // Final fallback: use .env proxy credentials (Bright Data residential proxy)
+  if (env.PROXY_HOST && env.PROXY_PORT) {
+    return {
+      host: env.PROXY_HOST,
+      port: env.PROXY_PORT,
+      auth: env.PROXY_USERNAME ? {
+        username: env.PROXY_USERNAME,
+        password: env.PROXY_PASSWORD || '',
       } : undefined,
     };
   }
