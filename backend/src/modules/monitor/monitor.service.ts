@@ -361,6 +361,12 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
         setMonitor(config.id, { ...latest, lastHttpStatus: status || 500 });
       }
 
+      // Log response body for non-403 errors to help diagnose unexpected status codes
+      if (status && status !== 403 && err.response?.data) {
+        logEvent('warn', EventType.BOOKING_FAILED,
+          `VFS ${status} response body: ${JSON.stringify(err.response.data).slice(0, 500)}`);
+      }
+
       if (status === 403) {
         logEvent('warn', EventType.BOOKING_FAILED, `Fetch slots blocked (403). Switching to Ultimate Bypass (Browser Fetch)...`);
         const proxyConfig = await getProxyConfig(config.id);
