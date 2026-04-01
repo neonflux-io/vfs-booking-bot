@@ -23,6 +23,10 @@ export interface VfsCredentials {
 
 /** Launch a stealth Chromium with optional proxy. */
 async function launchBrowser(proxy?: { host: string; port: number; auth?: { username: string; password?: string } }) {
+  const proxyArgs = proxy
+    ? [`--proxy-server=http://${proxy.host}:${proxy.port}`]
+    : [];
+
   return chromium.launch({
     headless: true,
     executablePath: env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
@@ -33,6 +37,7 @@ async function launchBrowser(proxy?: { host: string; port: number; auth?: { user
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
       '--disable-notifications',
+      ...proxyArgs,
     ],
   });
 }
