@@ -21,22 +21,36 @@ export interface VfsCredentials {
   password: string;
 }
 
-/** Launch a stealth Chromium with optional proxy. */
+export interface WarmerResult {
+  cookies: string[];
+  userAgent: string;
+  secChUa: string;
+}
+
+/** Launch a stealth Chromium with optional proxy and sticky session. */
 async function launchBrowser(proxy?: { host: string; port: number; auth?: { username: string; password?: string } }) {
-  const proxyArgs = proxy
-    ? [`--proxy-server=http://${proxy.host}:${proxy.port}`]
-    : [];
+  const proxyArgs = proxy ? [`--proxy-server=http://${proxy.host}:${proxy.port}`] : [];
 
   return chromium.launch({
     headless: true,
     executablePath: env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-    ignoreDefaultArgs: ['--enable-automation'],
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
+      '--disable-dev-shm-usage',        // Use disk instead of /dev/shm
+      '--disable-gpu',                  // No GPU in Docker
+      '--disable-software-rasterizer',
       '--disable-blink-features=AutomationControlled',
       '--disable-notifications',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-sync',
+      '--disable-translate',
+      '--hide-scrollbars',
+      '--mute-audio',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--js-flags=--max-old-space-size=512',
+      '--window-size=1280,720',
       ...proxyArgs,
     ],
   });
@@ -45,10 +59,6 @@ async function launchBrowser(proxy?: { host: string; port: number; auth?: { user
 const UA   = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
 const CHDR = '"Google Chrome";v="134", "Chromium";v="134", "Not:A-Brand";v="24"';
 
-/**
- * Log in to VFS using Angular Material selectors, then navigate to the
- * schedule-appointment page so Angular fully bootstraps and sets XSRF-TOKEN.
- */
 async function loginAndNavigate(
   page: any,
   sourceCode: string,
@@ -58,259 +68,100 @@ async function loginAndNavigate(
   const loginUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/login`;
   const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
 
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] Logging in to VFS (${sourceCode}→${destinationCode}) as ${credentials.email}...`);
+  await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 180000 });
+  if (page.url().includes('403')) throw new Error('VFS 403 Forbidden - Proxy blocked');
 
-  await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  // Tiered Resilience: Wait for basic markers first, then Angular root
+  await page.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => null);
 
-  // Log what page we actually landed on before waiting for Angular
-  const landedUrl   = page.url();
-  const landedTitle = await page.title().catch(() => '');
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] Landed on: ${landedUrl} | "${landedTitle}"`);
-
-  // Wait for Angular to bootstrap then for the router to finish loading login module
-  await page.waitForSelector('[ng-version]', { timeout: 45000 });
-  await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => null);
-
-  // Debug: log all visible buttons so we can identify what's blocking the login form
-  const buttons = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('button')).map(b => ({
-      id: (b as HTMLElement).id,
-      text: b.textContent?.trim().slice(0, 60),
-      visible: (b as HTMLElement).offsetParent !== null,
-    }))
-  ).catch(() => []) as any[];
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] Buttons on page: ${JSON.stringify(buttons.filter((b: any) => b.visible).slice(0, 12))}`);
-
-  // Dismiss OneTrust — try every known variant (simple banner + full preference center)
-  const oneTrustSelectors = [
-    '#onetrust-accept-btn-handler',
-    '#accept-recommended-btn-handler',
-    'button.save-preference-btn-handler',
-    '.onetrust-close-btn-handler',
-    'button:has-text("Accept All Cookies")',
-    'button:has-text("Accept All")',
-    'button:has-text("I Accept")',
-    'button:has-text("Confirm My Choices")',
-    'button:has-text("Allow All")',
-    'button:has-text("Agree")',
-  ];
-  for (const sel of oneTrustSelectors) {
-    const clicked = await page.locator(sel).first()
-      .click({ timeout: 3000 })
-      .then(() => true)
-      .catch(() => false);
-    if (clicked) {
-      logEvent('info', EventType.MONITOR_STARTED, `[Warmer] Dismissed OneTrust via: ${sel}`);
-      // Give Angular time to remove the overlay and render the login form
-      // networkidle fires instantly (no network requests from consent click),
-      // so we need an explicit wait for the DOM render cycle
-      await page.waitForTimeout(3000);
-      break;
-    }
-  }
-
-  // Log current URL/title after OneTrust to detect redirects
-  const postConsentUrl   = page.url();
-  const postConsentTitle = await page.title().catch(() => '');
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] After OneTrust: URL=${postConsentUrl} | Title=${postConsentTitle}`);
-
-  // VFS IP-block / rate-limit detection: they redirect to page-not-found with a specific message
-  if (postConsentUrl.includes('page-not-found') || postConsentTitle.toLowerCase().includes('unable to progress')) {
-    throw new Error('VFS blocked this IP — please try again in 1 hour or configure a residential proxy');
-  }
-
-  // Wait for login form — Angular renders it after cookie banner is dismissed
-  const emailSelector = 'input[id="mat-input-0"], input[type="email"], input[formcontrolname="email"]';
-  const pwdSelector   = 'input[id="mat-input-1"], input[type="password"], input[formcontrolname="password"]';
-
-  // First check if it's attached (exists in DOM) — tells us if it's a render vs visibility issue
-  const emailAttached = await page.waitForSelector(emailSelector, { timeout: 20000, state: 'attached' })
-    .then(() => true).catch(() => false);
-  const emailVisible = emailAttached &&
-    await page.waitForSelector(emailSelector, { timeout: 5000, state: 'visible' })
-      .then(() => true).catch(() => false);
-  if (!emailVisible) {
-    const allInputs = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('input')).map(i => ({
-        id: (i as HTMLElement).id, type: (i as HTMLInputElement).type,
-        fc: i.getAttribute('formcontrolname'), visible: (i as HTMLElement).offsetParent !== null,
-      }))
-    ).catch(() => []);
-    const pageText = await page.evaluate(() =>
-      document.body?.innerText?.slice(0, 500)
-    ).catch(() => '');
-    logEvent('warn', EventType.MONITOR_STARTED,
-      `[Warmer] Email input not found (attached=${emailAttached}). Inputs: ${JSON.stringify(allInputs)} | Body: ${pageText}`);
-    throw new Error('Login form not found after OneTrust dismiss attempt');
-  }
-  await page.fill(emailSelector, credentials.email);
-  await page.fill(pwdSelector, credentials.password);
-
-  // Submit and wait for navigation away from login page
-  await Promise.all([
-    page.waitForURL((url: string) => !url.includes('/login'), { timeout: 30000 }),
-    page.click('button[type="submit"]'),
-  ]).catch(async () => {
-    // If URL didn't change, click confirm button if it appeared
-    await page.locator('button:has-text("Confirm"), button:has-text("OK")').first().click({ timeout: 3000 }).catch(() => null);
+  // Look for any VFS marker (Logo, ng-version, or the loading spinner)
+  await Promise.race([
+    page.waitForSelector('[ng-version]', { timeout: 90000 }),
+    page.waitForSelector('img[alt*="VFS"]', { timeout: 90000 }),
+    page.waitForSelector('input[formcontrolname="username"]', { timeout: 90000 }),
+  ]).catch(() => {
+    logEvent('warn', EventType.BOOKING_FAILED, `[Warmer] VFS markers missing after 90s. Continuing with caution...`);
   });
 
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] Login succeeded. Navigating to schedule-appointment...`);
+  // ── CRITICAL: Check page is still alive before proceeding ──────────────────
+  if (page.isClosed()) {
+    throw new Error('VFS closed the browser tab (bot detection). Will retry with new proxy.');
+  }
 
-  // Navigate to slot-check page so Angular fires get-slots
-  await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  // Dismiss OneTrust
+  const oneTrustSelectors = ['#onetrust-accept-btn-handler', 'button:has-text("Accept All")'];
+  for (const sel of oneTrustSelectors) {
+    try { await page.locator(sel).first().click({ timeout: 5000 }); break; } catch {}
+  }
+
+  // Guard again after cookie banner dismissal
+  if (page.isClosed()) {
+    throw new Error('VFS closed the browser tab after cookie banner. Will retry with new proxy.');
+  }
+
+  // Wait explicitly for the login form to be ready before filling
+  await page.waitForSelector('input[formcontrolname="username"]', { timeout: 60000, state: 'visible' });
+  await page.locator('input[formcontrolname="username"]').first().fill(credentials.email);
+  await page.locator('input[formcontrolname="password"]').first().fill(credentials.password);
+  await page.locator('button[type="submit"]').first().click({ timeout: 10000 });
+
+  await page.waitForTimeout(10000);
+  await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 180000 });
 }
 
 export async function warmSessionWithBrowser(
-  id: string,
   sourceCode: string,
   destinationCode: string,
-  visaCategory: string,
+  credentials: VfsCredentials,
   proxy?: { host: string; port: number; auth?: { username: string; password?: string } },
-  credentials?: VfsCredentials,
-): Promise<{ cookies: string[]; userAgent: string; secChUa: string; slotData?: any } | undefined> {
-  const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
-
-  logEvent('info', EventType.MONITOR_STARTED,
-    `Launching stealth browser to warm session for ${destinationCode}${credentials ? ' (with login)' : ''}...`);
+): Promise<WarmerResult> {
+  logEvent('info', EventType.MONITOR_STARTED, `[Warmer] Bypassing security via Browser for ${destinationCode}...`);
 
   let browser;
   try {
     browser = await launchBrowser(proxy);
-
     const context = await browser.newContext({
       userAgent: UA,
       viewport: { width: 1280, height: 720 },
-      deviceScaleFactor: 1,
-      locale: 'en-GB',
-      ignoreHTTPSErrors: true,
-      extraHTTPHeaders: {
-        'sec-ch-ua': CHDR,
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-      },
       ...(proxy && {
         proxy: {
           server: `http://${proxy.host}:${proxy.port}`,
-          username: proxy.auth?.username,
+          username: env.PROXY_USERNAME ? `${env.PROXY_USERNAME}-session-${Math.random().toString(36).substring(7)}` : proxy.auth?.username,
           password: proxy.auth?.password,
         },
       }),
     });
 
     const page = await context.newPage();
+    await loginAndNavigate(page, sourceCode, destinationCode, credentials);
 
-    // Block ads/media to save RAM & bandwidth
-    await page.route('**/*', (route: any) => {
-      const url = route.request().url().toLowerCase();
-      if (url.match(/\.(png|jpg|jpeg|gif|svg|woff|woff2|mp4|webm)$/) ||
-          BLOCK_LIST.some(s => url.includes(s))) {
-        return route.abort();
-      }
-      return route.continue();
-    });
+    const playwrightCookies = await context.cookies();
+    const cookieStrings = playwrightCookies.map(c => `${c.name}=${c.value}`);
 
-    // Stealth: hide webdriver flag
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
+    return {
+      cookies: cookieStrings,
+      userAgent: UA,
+      secChUa: CHDR,
+    };
 
-    // Passive listener — registered before any navigation
-    let passiveSlotsData: any = null;
-    page.on('response', async (response: any) => {
-      if (response.url().includes('get-slots') && response.status() === 200) {
-        try {
-          passiveSlotsData = await response.json();
-          logEvent('info', EventType.MONITOR_STARTED,
-            `[Warmer] Passively captured get-slots for ${destinationCode}!`);
-        } catch {}
-      }
-    });
-
-    if (credentials) {
-      // Full login flow → Angular sets XSRF-TOKEN after auth
-      await loginAndNavigate(page, sourceCode, destinationCode, credentials);
-    } else {
-      // Anonymous visit — may still work for some VFS offices
-      await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await page.waitForSelector('[ng-version]', { timeout: 30000 }).catch(() => null);
-    }
-
-    // Give Angular time to fire auto-API calls (up to 20s, exits early on capture)
-    await Promise.race([
-      page.waitForResponse(
-        (r: any) => r.url().includes('get-slots') && r.status() === 200,
-        { timeout: 20000 }
-      ).catch(() => null),
-      page.waitForTimeout(20000),
-    ]);
-
-    const cookies = await context.cookies();
-    const cookieStrings = cookies.map(c => `${c.name}=${c.value}`);
-    const cookieNames = cookies.map(c => c.name).join(', ');
-    logEvent('info', EventType.MONITOR_STARTED,
-      `[Warmer] Cookies for ${destinationCode}: [${cookieNames || 'none'}]`);
-
-    if (cookieStrings.length > 0) {
-      if (passiveSlotsData) {
-        return { cookies: cookieStrings, userAgent: UA, secChUa: CHDR, slotData: passiveSlotsData };
-      }
-
-      // Try in-session fetch using live XSRF-TOKEN
-      const xsrfCookie = cookies.find(c => c.name === 'XSRF-TOKEN');
-      if (xsrfCookie) {
-        const xsrfToken = decodeURIComponent(xsrfCookie.value);
-        const slotsUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment/get-slots`;
-        logEvent('info', EventType.MONITOR_STARTED,
-          `[Warmer] XSRF-TOKEN found — in-session slot fetch for ${destinationCode}...`);
-        try {
-          const slotData = await page.evaluate(
-            async ({ url, token, src, vCat }: { url: string; token: string; src: string; vCat: string }) => {
-              const res = await fetch(url, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Accept': 'application/json, text/plain, */*',
-                  'X-XSRF-TOKEN': token,
-                  'Referer': window.location.href,
-                  'Origin': 'https://visa.vfsglobal.com',
-                },
-                credentials: 'include',
-                body: JSON.stringify({ visaCategory: vCat, country: src.toUpperCase() }),
-              });
-              if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-              return res.json();
-            },
-            { url: slotsUrl, token: xsrfToken, src: sourceCode, vCat: visaCategory }
-          );
-          return { cookies: cookieStrings, userAgent: UA, secChUa: CHDR, slotData };
-        } catch (fetchErr: any) {
-          logEvent('warn', EventType.BOOKING_FAILED,
-            `[Warmer] In-session slot fetch failed: ${fetchErr.message}`);
-        }
-      } else {
-        logEvent('warn', EventType.BOOKING_FAILED,
-          `[Warmer] XSRF-TOKEN not in cookies — Angular may not have fully initialized.`);
-      }
-
-      return { cookies: cookieStrings, userAgent: UA, secChUa: CHDR };
-    }
-
-    logEvent('warn', EventType.BOOKING_FAILED,
-      `[Warmer] No cookies received for ${destinationCode}.`);
   } catch (err: any) {
-    logEvent('error', EventType.BOOKING_FAILED,
-      `Browser session warming failed: ${err.message}`);
+    if (browser) {
+      try {
+        const contexts = browser.contexts();
+        const pages = contexts.length > 0 ? contexts[0].pages() : [];
+        if (pages.length > 0) {
+          await pages[0].screenshot({ path: 'recordings/latest_failure.png', fullPage: true });
+          logEvent('warn', EventType.BOOKING_FAILED, `[Warmer] Failure screenshot saved to recordings/latest_failure.png`);
+        }
+      } catch (screenshotErr) {
+        // Ignore screenshot errors to prevent masking original error
+      }
+    }
+    logEvent('error', EventType.BOOKING_FAILED, `[Warmer] Browser bypass failed: ${err.message}`);
+    throw err;
   } finally {
     if (browser) await browser.close();
   }
-
-  return undefined;
 }
 
 export async function fetchSlotsWithBrowser(
@@ -322,124 +173,36 @@ export async function fetchSlotsWithBrowser(
   _retried = false,
   credentials?: VfsCredentials,
 ): Promise<any> {
-  const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment`;
   const slotsApiUrl  = `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment/get-slots`;
-
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[BrowserFetch] Single-session slot fetch for ${destCode}${credentials ? ' (with login)' : ''}...`);
 
   let browser;
   try {
     browser = await launchBrowser(proxy);
-
     const context = await browser.newContext({
       userAgent: UA,
-      viewport: { width: 1280, height: 720 },
-      locale: 'en-GB',
-      ignoreHTTPSErrors: true,
-      extraHTTPHeaders: {
-        'accept-language': 'en-GB,en;q=0.9',
-        'sec-ch-ua': CHDR,
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-      },
       ...(proxy && {
         proxy: {
           server: `http://${proxy.host}:${proxy.port}`,
-          username: proxy.auth?.username,
+          username: env.PROXY_USERNAME ? `${env.PROXY_USERNAME}-session-${Math.random().toString(36).substring(7)}` : proxy.auth?.username,
           password: proxy.auth?.password,
         },
       }),
     });
 
     const page = await context.newPage();
-
-    await page.route('**/*', (route: any) => {
-      const url = route.request().url().toLowerCase();
-      if (url.match(/\.(png|jpg|jpeg|gif|svg|woff|woff2|mp4)$/) ||
-          BLOCK_LIST.some((s: string) => url.includes(s))) {
-        return route.abort();
-      }
-      return route.continue();
-    });
-
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
-
-    // Passive listener
-    let passiveSlotsData: any = null;
-    page.on('response', async (response: any) => {
-      if (response.url().includes('get-slots') && response.status() === 200) {
-        try {
-          passiveSlotsData = await response.json();
-          logEvent('info', EventType.MONITOR_STARTED,
-            `[BrowserFetch] Passively captured get-slots for ${destCode}!`);
-        } catch {}
-      }
-    });
-
     if (credentials) {
       await loginAndNavigate(page, sourceCode, destCode, credentials);
     } else {
-      await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await page.waitForSelector('[ng-version]', { timeout: 30000 }).catch(() => null);
+      await page.goto(`https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment`, { waitUntil: 'domcontentloaded', timeout: 180000 });
     }
 
-    // Wait up to 20s for passive capture
-    await Promise.race([
-      page.waitForResponse(
-        (r: any) => r.url().includes('get-slots') && r.status() === 200,
-        { timeout: 20000 }
-      ).catch(() => null),
-      page.waitForTimeout(20000),
-    ]);
-
-    if (passiveSlotsData) return passiveSlotsData;
-
-    // Extract XSRF-TOKEN for direct fetch
-    logEvent('info', EventType.MONITOR_STARTED,
-      `[BrowserFetch] No passive capture — extracting XSRF-TOKEN...`);
-
-    const liveCookies = await context.cookies();
-    const xsrfCookie  = liveCookies.find(c => c.name === 'XSRF-TOKEN');
-
-    if (!xsrfCookie) {
-      const names = liveCookies.map(c => c.name).join(', ');
-      throw new Error(`XSRF-TOKEN not found. Present cookies: [${names || 'none'}]`);
-    }
-
-    const xsrfToken = decodeURIComponent(xsrfCookie.value);
-    logEvent('info', EventType.MONITOR_STARTED,
-      `[BrowserFetch] XSRF-TOKEN acquired — posting to get-slots...`);
-
-    return await page.evaluate(
-      async ({ url, token, src, vCat }: { url: string; token: string; src: string; vCat: string }) => {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json, text/plain, */*',
-            'X-XSRF-TOKEN': token,
-            'Referer': window.location.href,
-            'Origin': 'https://visa.vfsglobal.com',
-          },
-          credentials: 'include',
-          body: JSON.stringify({ visaCategory: vCat, country: src.toUpperCase() }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-        return res.json();
-      },
-      { url: slotsApiUrl, token: xsrfToken, src: sourceCode, vCat: visaCategory }
-    );
+    const response = await page.waitForResponse(r => r.url().includes('get-slots') && r.status() === 200, { timeout: 60000 });
+    return await response.json();
 
   } catch (err: any) {
-    if (!_retried) {
-      logEvent('warn', EventType.BOOKING_FAILED,
-        `[BrowserFetch] First attempt failed (${err.message}). Retrying with login...`);
-      return fetchSlotsWithBrowser(sourceCode, destCode, visaCategory, proxy, _cookies, true, credentials);
+    if (!_retried && credentials) {
+        return fetchSlotsWithBrowser(sourceCode, destCode, visaCategory, proxy, _cookies, true, credentials);
     }
-    logEvent('error', EventType.BOOKING_FAILED, `[BrowserFetch] Failed: ${err.message}`);
     throw err;
   } finally {
     if (browser) await browser.close();

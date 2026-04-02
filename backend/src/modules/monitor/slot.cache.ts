@@ -6,7 +6,7 @@ interface CacheEntry {
 }
 
 const slotCache = new Map<string, CacheEntry>();
-const COALESCE_TTL_MS = 8_000;
+const COALESCE_TTL_MS = 120_000;
 
 export function getCachedSlots(key: string): Promise<SlotInfo[]> | undefined {
   const entry = slotCache.get(key);

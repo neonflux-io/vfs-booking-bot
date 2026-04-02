@@ -3,14 +3,16 @@ import fs from 'fs';
 import http from 'http';
 import { env } from '@config/env';
 
-// Ensure session directory exists (created by Dockerfile in Docker; this handles local dev)
+// Ensure session and recordings directories exist
 fs.mkdirSync(env.SESSION_DIR, { recursive: true });
+fs.mkdirSync('recordings', { recursive: true });
 import { connectDatabase, disconnectDatabase } from '@config/database';
 import { connectRedis, disconnectRedis } from '@config/redis';
 import { createApp } from './app';
 import { initWebSocket } from '@modules/websocket/ws.server';
 import { startBookingWorker, stopBookingWorker } from '@modules/booking/booking.worker';
 import { initTelegramBot } from '@modules/notifications/telegram.bot';
+import { autoStartMonitors } from '@modules/monitor/monitor.service';
 
 
 async function bootstrap() {
@@ -34,7 +36,11 @@ async function bootstrap() {
 
   // Interactive Telegram Bot
   initTelegramBot();
-
+  
+  // Auto-Start active monitors from DB state
+  const { autoStartMonitors } = require('@modules/monitor/monitor.service');
+  await autoStartMonitors();
+  console.info('✅ Monitor Service auto-started');
 
   server.listen(env.PORT, () => {
     console.info(`✅ Server running on port ${env.PORT} [${env.NODE_ENV}]`);

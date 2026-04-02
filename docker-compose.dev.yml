@@ -31,7 +31,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
-    shm_size: '1gb'
+    shm_size: '512mb'
     restart: unless-stopped
     env_file: .env
     environment:
@@ -44,6 +44,7 @@ services:
     volumes:
       - ./backend/src:/app/src
       - ./backend/prisma:/app/prisma
+      - ./backend/recordings:/app/recordings
       - sessions-data:/app/sessions
     command: sh -c "npx prisma migrate deploy && npm run dev"
     depends_on:

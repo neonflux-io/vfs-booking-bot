@@ -1,25 +1,23 @@
 import { Request, Response, NextFunction } from 'express';
-import { startMonitor, stopMonitor, getMonitorStatus } from './monitor.service';
+import { createOrStartMonitor, stopMonitor, getMonitorStatus } from './monitor.service';
 
-export function startMonitorHandler(req: Request, res: Response, next: NextFunction) {
+export async function startMonitorHandler(req: Request, res: Response, next: NextFunction) {
   try {
     const {
-      sourceCountry, destination, visaType, intervalMs, profileIds, mode, proxy,
-      proxyForWarmOnly, activeHoursUtc, maintenanceWindowUtc, offHoursIntervalMs,
+      sourceCountry, destination, visaType, intervalMs, profileIds,
     } = req.body;
-    const id = startMonitor({
-      sourceCountry: sourceCountry || 'angola',
+    
+    // We now use createOrStartMonitor so that even after a backend restart,
+    // we can re-populate the in-memory Map from the frontend's request.
+    const id = await createOrStartMonitor({
+      id: req.body.id, // Use existing ID if provided
+      sourceCountry: sourceCountry || 'usa',
       destination,
       visaType,
-      intervalMs: intervalMs ?? 10000,
+      intervalMs: intervalMs ?? 30000,
       profileIds: profileIds ?? [],
-      mode: mode ?? 'auto',
-      proxy: proxy ?? undefined,
-      proxyForWarmOnly: proxyForWarmOnly ?? true, // Opt 1: default on — proxy warm only
-      activeHoursUtc: activeHoursUtc ?? { startHour: 7, endHour: 16 },       // 07–16 UTC
-      maintenanceWindowUtc: maintenanceWindowUtc ?? { startHour: 0, endHour: 6 }, // 00–06 UTC
-      offHoursIntervalMs: offHoursIntervalMs ?? 300_000, // 5 min outside active hours
     });
+
     res.json({ monitorId: id, message: 'Monitor started' });
   } catch (err) { next(err); }
 }
