@@ -109,7 +109,9 @@ model Booking {
   id             String        @id @default(cuid())
   profile        Profile       @relation(fields: [profileId], references: [id], onDelete: Cascade)
   profileId      String
-  destination    String        // "brazil" | "portugal"
+  sourceCountry  String?       // ISO 3166-1 alpha-3 (e.g. "gbr", "ind")
+  destination    String        // ISO 3166-1 alpha-3 (e.g. "prt", "deu")
+  city           String?       // VFS Application Centre ID (e.g. "london", "mumbai")
   visaType       String
   slotDate       DateTime?
   slotTime       String?

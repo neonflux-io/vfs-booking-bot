@@ -1,7 +1,8 @@
 export interface MonitorConfig {
   id: string;
-  sourceCountry: 'uk' | 'usa' | 'angola';
-  destination: 'portugal' | 'brazil';
+  sourceCountry: string;        // ISO 3166-1 alpha-3 (e.g. 'gbr', 'ind', 'ago')
+  destination: string;           // ISO 3166-1 alpha-3 (e.g. 'prt', 'deu', 'bra')
+  centre: string;                // VFS Application Centre ID (e.g. 'london', 'mumbai')
   visaType: string;
   intervalMs: number;
   profileIds: string[];

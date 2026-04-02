@@ -37,7 +37,9 @@ export async function enqueueBooking(payload: BookingJobPayload): Promise<string
   await prisma.booking.create({
     data: {
       profileId: payload.profileId,
+      sourceCountry: payload.sourceCountry ?? null,
       destination: payload.destination,
+      city: payload.centre ?? null,
       visaType: payload.visaType,
       slotDate: payload.slot.date ? new Date(payload.slot.date) : null,
       slotTime: payload.slot.time,

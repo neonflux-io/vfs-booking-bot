@@ -15,6 +15,7 @@ import { prisma } from '@config/database';
 import { warmSessionWithBrowser, fetchSlotsWithBrowser, VfsCredentials } from './session.warmer';
 import { decrypt } from '@utils/crypto';
 import { getCachedSlots, setCachedSlots } from './slot.cache';
+import { resolveSourceCode, resolveDestinationCode, getCountryLabel, getCentreLabel } from '@config/vfs-countries';
 
 // VFS Global availability endpoint (discovered via DevTools network capture)
 // NOTE: This URL/params may change — update via vfs.selectors Settings if needed
@@ -40,29 +41,14 @@ function getRandomAgent() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
-// Maps UI source keys -> VFS 3-letter source country codes
-const SOURCE_CODES: Record<string, string> = {
-  uk:     'gbr',
-  usa:    'usa',
-  angola: 'ago',
-};
-
-// Maps UI destination keys -> VFS 3-letter destination country codes
-const DESTINATION_CODES: Record<string, string> = {
-  portugal: 'prt',
-  brazil:   'bra',
-};
-
+// Dynamic country code resolution via vfs-countries.ts
+// Supports both legacy keys (uk, portugal) and ISO 3166-1 alpha-3 codes (gbr, prt)
 function getSourceCode(source: string): string {
-  const code = SOURCE_CODES[source.toLowerCase()];
-  if (!code) throw new Error(`Unsupported source: ${source}`);
-  return code;
+  return resolveSourceCode(source);
 }
 
 function getDestinationCode(destination: string): string {
-  const code = DESTINATION_CODES[destination.toLowerCase()];
-  if (!code) throw new Error(`Unsupported destination: ${destination}`);
-  return code;
+  return resolveDestinationCode(destination);
 }
 
 function buildAvailabilityUrl(sourceCode: string, destinationCode: string): string {
@@ -563,14 +549,18 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
   };
   setMonitor(id, state);
 
-  logEvent('info', EventType.MONITOR_STARTED, `Monitor started for ${config.sourceCountry.toUpperCase()} -> ${config.destination.toUpperCase()}`, {
+  const srcLabel = getCountryLabel(config.sourceCountry);
+  const dstLabel = getCountryLabel(config.destination);
+  const ctrLabel = getCentreLabel(config.sourceCountry, config.centre);
+  logEvent('info', EventType.MONITOR_STARTED, `Monitor started for ${srcLabel} → ${dstLabel} (${ctrLabel})`, {
     destination: config.destination,
   });
   emitToAll('MONITOR_STATUS', { 
     monitorId: id, 
     status: 'started', 
     sourceCountry: config.sourceCountry,
-    destination: config.destination 
+    destination: config.destination,
+    centre: config.centre,
   });
 
   // Use recursive setTimeout instead of setInterval so the adaptive delay
@@ -633,7 +623,9 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
             for (const slot of newSlots) {
               await enqueueBooking({
                 profileId,
+                sourceCountry: fullConfig.sourceCountry,
                 destination: slot.destination,
+                centre: fullConfig.centre,
                 visaType: slot.visaType,
                 slot,
               });
@@ -698,15 +690,19 @@ export function stopMonitor(id: string): void {
 export function getMonitorStatus() {
   return getAllMonitors().map((m) => ({
     id: m.config.id,
+    sourceCountry: m.config.sourceCountry,
     destination: m.config.destination,
+    centre: m.config.centre,
     visaType: m.config.visaType,
     isRunning: m.isRunning,
     lastCheckedAt: m.lastCheckedAt,
     slotDetectedCount: m.slotDetectedCount,
     mode: m.config.mode,
-    sourceCountry: m.config.sourceCountry,
     lastHttpStatus: m.lastHttpStatus,
     interval: m.config.intervalMs,
+    sourceLabel: getCountryLabel(m.config.sourceCountry),
+    destinationLabel: getCountryLabel(m.config.destination),
+    centreLabel: getCentreLabel(m.config.sourceCountry, m.config.centre),
   }));
 }
 

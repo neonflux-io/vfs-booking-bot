@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useMonitorStore } from '@/store/monitorStore';
@@ -18,17 +18,26 @@ import {
   Clock,
   LayoutGrid,
   ChevronRight,
-  UserCheck
+  UserCheck,
+  MapPin,
+  Building2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+
+// ─── Types for VFS Config API ────────────────────────────────────────────────
+interface VfsCountry { code: string; label: string; }
+interface VfsCentre { id: string; label: string; address?: string; }
+interface VfsVisaType { code: string; label: string; category: string; }
 
 export default function SetupPage() {
   const qc = useQueryClient();
   const { setMonitors } = useMonitorStore();
 
-  const [sourceCountry, setSourceCountry] = useState<'uk' | 'usa'>('uk');
-  const [destination, setDestination] = useState('portugal');
-  const [visaType, setVisaType] = useState('SCH');
+  // ─── Form State ──────────────────────────────────────────────────────────
+  const [sourceCountry, setSourceCountry] = useState('gbr');
+  const [destination, setDestination] = useState('prt');
+  const [centre, setCentre] = useState('');
+  const [visaType, setVisaType] = useState('');
   const [intervalMs, setIntervalMs] = useState(10000);
   const [mode, setMode] = useState<'auto' | 'manual'>('auto');
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>([]);
@@ -39,6 +48,87 @@ export default function SetupPage() {
     password?: string 
   } | null>(null);
 
+  // ─── Fetch VFS Config (countries, centres, visa types) ───────────────────
+  const { data: vfsConfig } = useQuery({
+    queryKey: ['vfs-config'],
+    queryFn: () => api.get('/vfs-config').then((r) => r.data),
+    staleTime: 1000 * 60 * 60, // Cache for 1 hour — this data rarely changes
+  });
+
+  // Fetch centres when source country changes
+  const { data: centres } = useQuery({
+    queryKey: ['vfs-centres', sourceCountry],
+    queryFn: () => api.get(`/vfs-config/centres/${sourceCountry}`).then((r) => r.data),
+    enabled: !!sourceCountry,
+  });
+
+  // Fetch visa types when destination changes
+  const { data: visaTypes } = useQuery({
+    queryKey: ['vfs-visa-types', destination],
+    queryFn: () => api.get(`/vfs-config/visa-types/${destination}`).then((r) => r.data),
+    enabled: !!destination,
+  });
+
+  // ─── Derived Options ─────────────────────────────────────────────────────
+  const sourceOptions = useMemo(() => 
+    (vfsConfig?.sourceCountries ?? []).map((c: VfsCountry) => ({ value: c.code, label: c.label })),
+    [vfsConfig]
+  );
+
+  const destOptions = useMemo(() => 
+    (vfsConfig?.destinationCountries ?? []).map((c: VfsCountry) => ({ value: c.code, label: c.label })),
+    [vfsConfig]
+  );
+
+  const centreOptions = useMemo(() => 
+    (centres ?? []).map((c: VfsCentre) => ({ value: c.id, label: c.label })),
+    [centres]
+  );
+
+  const visaTypeOptions = useMemo(() => {
+    const types = visaTypes ?? [];
+    // Group by category for visual separation
+    const shortStay = types.filter((t: VfsVisaType) => t.category === 'short-stay');
+    const longStay = types.filter((t: VfsVisaType) => t.category === 'long-stay');
+    const national = types.filter((t: VfsVisaType) => t.category === 'national');
+    const other = types.filter((t: VfsVisaType) => t.category === 'other');
+    return [
+      ...shortStay.map((t: VfsVisaType) => ({ value: t.code, label: `${t.label}` })),
+      ...longStay.map((t: VfsVisaType) => ({ value: t.code, label: `${t.label}` })),
+      ...national.map((t: VfsVisaType) => ({ value: t.code, label: `${t.label}` })),
+      ...other.map((t: VfsVisaType) => ({ value: t.code, label: t.label })),
+    ];
+  }, [visaTypes]);
+
+  // ─── Reset cascading selections when parent changes ──────────────────────
+  useEffect(() => {
+    setCentre('');
+  }, [sourceCountry]);
+
+  useEffect(() => {
+    setVisaType('');
+  }, [destination]);
+
+  // Auto-select first centre and visa type when options load
+  useEffect(() => {
+    if (centreOptions.length > 0 && !centre) {
+      setCentre(centreOptions[0].value);
+    }
+  }, [centreOptions, centre]);
+
+  useEffect(() => {
+    if (visaTypeOptions.length > 0 && !visaType) {
+      setVisaType(visaTypeOptions[0].value);
+    }
+  }, [visaTypeOptions, visaType]);
+
+  // Find selected centre's address
+  const selectedCentreAddress = useMemo(() => {
+    if (!centre || !centres) return null;
+    return (centres as VfsCentre[]).find((c) => c.id === centre)?.address ?? null;
+  }, [centre, centres]);
+
+  // ─── Profiles & Monitor Status ───────────────────────────────────────────
   const { data: profilesData } = useQuery({
     queryKey: ['profiles'],
     queryFn: () => api.get('/profiles').then((r) => r.data),
@@ -54,7 +144,8 @@ export default function SetupPage() {
   const startMutation = useMutation({
     mutationFn: () => api.post('/monitor/start', { 
       sourceCountry,
-      destination, 
+      destination,
+      centre,
       visaType, 
       intervalMs, 
       profileIds: selectedProfileIds, 
@@ -99,47 +190,57 @@ export default function SetupPage() {
             </div>
 
             <div className="space-y-10">
-              {/* Route Configuration */}
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
+              {/* Route Configuration — Source & Destination */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <CustomSelect
                   label="Applying From"
                   value={sourceCountry}
                   onChange={(val: any) => setSourceCountry(val)}
-                  options={[
-                    { value: 'uk', label: 'United Kingdom' },
-                    { value: 'usa', label: 'United States' },
-                  ]}
+                  options={sourceOptions}
                 />
                 <CustomSelect
                   label="Target Destination"
                   value={destination}
                   onChange={setDestination}
-                  options={[
-                    { value: 'portugal', label: 'Portugal' },
-                  ]}
-                />
-                <CustomSelect
-                  label="Visa Category"
-                  value={visaType}
-                  onChange={setVisaType}
-                  options={[
-                    { value: 'SCH', label: 'Schengen Short-Stay Visa' },
-                    { value: 'TRV', label: 'Tourist Visa' },
-                    { value: 'VIS', label: 'Visitor Visa' },
-                    { value: 'BUS', label: 'Business Visa' },
-                    { value: 'STU', label: 'Student Visa' },
-                    { value: 'WRK', label: 'Work Visa' },
-                    { value: 'SEA', label: 'Seasonal Work Visa' },
-                    { value: 'JOB', label: 'Job Seeker Visa' },
-                    { value: 'DNV', label: 'Digital Nomad Visa' },
-                    { value: 'D7',  label: 'D7 Passive Income Visa' },
-                    { value: 'GLD', label: 'Golden Visa (Investment)' },
-                    { value: 'FAM', label: 'Family Reunification' },
-                    { value: 'MED', label: 'Medical Treatment Visa' },
-                    { value: 'TRN', label: 'Airport Transit Visa' },
-                  ]}
+                  options={destOptions}
                 />
               </div>
+
+              {/* Application Centre (City) — NEW */}
+              {centreOptions.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-3.5 h-3.5 text-primary" />
+                    <label className="text-[10px] uppercase font-black tracking-widest text-muted-foreground">
+                      Application Centre (City)
+                    </label>
+                  </div>
+                  <CustomSelect
+                    label=""
+                    value={centre}
+                    onChange={setCentre}
+                    options={centreOptions}
+                  />
+                  {selectedCentreAddress && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="flex items-center gap-2 pl-1"
+                    >
+                      <Building2 className="w-3 h-3 text-muted-foreground" />
+                      <span className="text-[10px] text-muted-foreground italic">{selectedCentreAddress}</span>
+                    </motion.div>
+                  )}
+                </div>
+              )}
+
+              {/* Visa Category */}
+              <CustomSelect
+                label="Visa Category"
+                value={visaType}
+                onChange={setVisaType}
+                options={visaTypeOptions}
+              />
 
               {/* Execution Mode Toggle */}
               <div className="space-y-4">
@@ -241,7 +342,7 @@ export default function SetupPage() {
             </div>
           </div>
 
-          {/* Proxy Configuration (New) */}
+          {/* Proxy Configuration */}
           <div className="card p-8 bg-card/40 backdrop-blur-md border-primary/10 shadow-xl mt-6">
             <div className="flex items-center gap-4 mb-6">
               <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
@@ -323,9 +424,17 @@ export default function SetupPage() {
                       </div>
                       <div>
                         <h4 className="text-sm font-bold uppercase tracking-tight">
-                          {m.sourceCountry ? m.sourceCountry.toUpperCase() : 'N/A'} → {m.destination.toUpperCase()}
+                          {m.sourceLabel || m.sourceCountry?.toUpperCase() || 'N/A'} → {m.destinationLabel || m.destination?.toUpperCase()}
                         </h4>
-                        <p className="text-[10px] text-muted-foreground">{m.visaType}</p>
+                        <div className="flex items-center gap-1.5">
+                          {m.centreLabel && (
+                            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                              <MapPin className="w-2.5 h-2.5" />
+                              {m.centreLabel}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-muted-foreground">• {m.visaType}</span>
+                        </div>
                       </div>
                     </div>
                     <button

@@ -12,9 +12,10 @@ export interface VfsSelectors {
   loginPassword: string;
   loginSubmit: string;
 
-  // Country / visa selection
+  // Country / visa / centre selection
   countryOfResidenceDropdown: string;
   destinationCountryDropdown: string;
+  vacCentreDropdown: string;
   visaCategoryDropdown: string;
   continueButton: string;
 
@@ -51,10 +52,11 @@ export const DEFAULT_SELECTORS: VfsSelectors = {
   loginPassword: 'input[id="mat-input-1"]',
   loginSubmit:   'button[type="submit"]',
 
-  // Country / visa selection — Angular Material mat-select
+  // Country / visa / centre selection — Angular Material mat-select
   countryOfResidenceDropdown: 'mat-select#mat-select-0, mat-select:nth-of-type(1)',
   destinationCountryDropdown: 'mat-select#mat-select-1, mat-select:nth-of-type(2)',
-  visaCategoryDropdown:       'mat-select#mat-select-2, mat-select:nth-of-type(3)',
+  vacCentreDropdown:          'mat-select#mat-select-2, mat-select:nth-of-type(3), mat-select[formcontrolname="centre"], mat-select[formcontrolname="center"]',
+  visaCategoryDropdown:       'mat-select#mat-select-3, mat-select:nth-of-type(4), mat-select[formcontrolname="visaCategory"]',
   continueButton: 'button:has-text("Continue"), button.mat-raised-button:has-text("Next")',
 
   // Appointment calendar — Angular Material calendar

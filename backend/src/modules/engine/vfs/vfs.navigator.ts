@@ -7,6 +7,7 @@ import { clickWithHover, humanDelay, randomScroll } from '../humanBehavior';
 import { isSessionExpired } from '../sessionStore';
 import { AppError } from '@middleware/errorHandler';
 import { SlotInfo } from '@t/index';
+import { resolveDestinationCode } from '@config/vfs-countries';
 
 const VFS_BASE = 'https://visa.vfsglobal.com';
 const ANGOLA_ORIGIN = 'AGO';
@@ -25,7 +26,8 @@ interface BookingProfile {
 
 interface NavigatorOptions {
   sessionId: string;
-  destination: string;  // "brazil" | "portugal"
+  destination: string;  // ISO 3166-1 alpha-3 (e.g. 'prt', 'deu')
+  centre: string;       // VFS Application Centre ID (e.g. 'london', 'mumbai')
   visaType: string;
   slot: SlotInfo;
   profile: BookingProfile;
@@ -82,19 +84,16 @@ export async function runBookingFlow(
       await humanDelay(300, 700);
     }
 
-    // Select destination — map UI key to VFS 3-letter code
-    const DEST_CODES: Record<string, string> = {
-      portugal: 'PRT', france: 'FRA', germany: 'DEU', spain: 'ESP',
-      italy: 'ITA', netherlands: 'NLD', belgium: 'BEL', switzerland: 'CHE',
-      sweden: 'SWE', norway: 'NOR', denmark: 'DNK', finland: 'FIN',
-      austria: 'AUT', czechrepublic: 'CZE', poland: 'POL',
-      brazil: 'BRA', usa: 'USA', canada: 'CAN',
-      australia: 'AUS', china: 'CHN', japan: 'JPN', india: 'IND',
-      southafrica: 'ZAF',
-    };
-    const destCode = DEST_CODES[opts.destination.toLowerCase()] ?? opts.destination.toUpperCase();
+    // Select destination — resolve to VFS 3-letter code
+    const destCode = resolveDestinationCode(opts.destination).toUpperCase();
     if (await page.$(sel.destinationCountryDropdown)) {
       await page.selectOption(sel.destinationCountryDropdown, destCode);
+      await humanDelay(300, 700);
+    }
+
+    // Select VFS Application Centre (city) — MANDATORY step
+    if (opts.centre && await page.$(sel.vacCentreDropdown)) {
+      await page.selectOption(sel.vacCentreDropdown, opts.centre);
       await humanDelay(300, 700);
     }
 

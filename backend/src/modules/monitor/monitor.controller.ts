@@ -4,12 +4,13 @@ import { startMonitor, stopMonitor, getMonitorStatus } from './monitor.service';
 export function startMonitorHandler(req: Request, res: Response, next: NextFunction) {
   try {
     const {
-      sourceCountry, destination, visaType, intervalMs, profileIds, mode, proxy,
+      sourceCountry, destination, centre, visaType, intervalMs, profileIds, mode, proxy,
       proxyForWarmOnly, activeHoursUtc, maintenanceWindowUtc, offHoursIntervalMs,
     } = req.body;
     const id = startMonitor({
-      sourceCountry: sourceCountry || 'angola',
+      sourceCountry: sourceCountry || 'gbr',
       destination,
+      centre: centre || '',
       visaType,
       intervalMs: intervalMs ?? 10000,
       profileIds: profileIds ?? [],

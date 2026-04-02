@@ -25,7 +25,9 @@ export interface SlotInfo {
 
 export interface BookingJobPayload {
   profileId: string;
+  sourceCountry?: string;
   destination: string;
+  centre?: string;       // VFS Application Centre ID
   visaType: string;
   slot: SlotInfo;
   attempt?: number;

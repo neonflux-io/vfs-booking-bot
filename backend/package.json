@@ -11,7 +11,11 @@
     "db:seed": "ts-node -r tsconfig-paths/register prisma/seed.ts",
     "db:studio": "prisma studio",
     "test": "jest --runInBand",
+    "test:unit": "jest --runInBand --testPathPattern=\"\\.test\\.ts$\"",
+    "test:integration": "jest --config jest.integration.config.js --runInBand",
+    "test:coverage": "jest --runInBand --coverage",
     "test:watch": "jest --watch",
+    "test:stress": "ts-node -r tsconfig-paths/register tests/stress/run.ts",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix"
   },
@@ -65,6 +69,10 @@
     "ts-jest": "^29.1.2",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "supertest": "^6.3.4",
+    "@types/supertest": "^6.0.2",
+    "dotenv": "^16.4.5",
+    "autocannon": "^7.15.0"
   }
 }

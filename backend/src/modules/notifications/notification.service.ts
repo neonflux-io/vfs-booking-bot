@@ -3,73 +3,71 @@ import { prisma } from '@config/database';
 import { sendTelegram } from './telegram.bot';
 import { sendEmail } from './email';
 import { sendPushToAll } from './webPush';
+import { getCountryLabel, getCentreLabel } from '@config/vfs-countries';
 
 interface NotificationPayload {
   event: 'SLOT_DETECTED' | 'BOOKING_SUCCESS' | 'BOOKING_FAILED';
   profileId?: string;
   sourceCountry?: string;
   destination?: string;
+  centre?: string;
   visaType?: string;
   confirmationNo?: string;
   slotDate?: string;
   errorMessage?: string;
 }
 
-const VISA_NAMES: Record<string, string> = {
-  SCH: 'Schengen Short-Stay',
-  TRV: 'Tourist Visa',
-  VIS: 'Visitor Visa',
-  BUS: 'Business Visa',
-  STU: 'Student Visa',
-  WRK: 'Work Visa',
-  SEA: 'Seasonal Work',
-  JOB: 'Job Seeker',
-  DNV: 'Digital Nomad',
-  D7:  'D7 Passive Income',
-  GLD: 'Golden Visa',
-  FAM: 'Family Reunification',
-  MED: 'Medical Treatment',
-  TRN: 'Airport Transit',
-};
-
 function getVisaLabel(code?: string): string {
   if (!code) return 'N/A';
-  return VISA_NAMES[code] || code;
+  return code;
 }
 
 function getRouteLabel(source?: string, dest?: string): string {
-  if (!source || !dest) return dest?.toUpperCase() || 'VFS';
-  return `[${source.toUpperCase()} → ${dest.toUpperCase()}]`;
+  if (!source || !dest) return dest ? getCountryLabel(dest) : 'VFS';
+  return `[${getCountryLabel(source)} → ${getCountryLabel(dest)}]`;
+}
+
+function getCentreDisplay(source?: string, centre?: string): string {
+  if (!centre) return '';
+  if (source) return `\nCentre: ${getCentreLabel(source, centre)}`;
+  return `\nCentre: ${centre}`;
 }
 
 function formatTelegramMessage(p: NotificationPayload & { profileName?: string }): string {
   const ts = new Date().toISOString();
+  const route = getRouteLabel(p.sourceCountry, p.destination);
+  const centre = getCentreDisplay(p.sourceCountry, p.centre);
   switch (p.event) {
     case 'SLOT_DETECTED':
-      return `🟡 *SLOT DETECTED ${getRouteLabel(p.sourceCountry, p.destination)}*\nVisa: ${getVisaLabel(p.visaType)}\nDate: ${p.slotDate ?? 'N/A'}\n\n_${ts}_`;
+      return `🟡 *SLOT DETECTED ${route}*${centre}\nVisa: ${getVisaLabel(p.visaType)}\nDate: ${p.slotDate ?? 'N/A'}\n\n_${ts}_`;
     case 'BOOKING_SUCCESS':
-      return `✅ *BOOKING CONFIRMED ${getRouteLabel(p.sourceCountry, p.destination)}*\nApplicant: ${p.profileName ?? 'Unknown'}\nRef: \`${p.confirmationNo}\`\n\n_${ts}_`;
+      return `✅ *BOOKING CONFIRMED ${route}*${centre}\nApplicant: ${p.profileName ?? 'Unknown'}\nRef: \`${p.confirmationNo}\`\n\n_${ts}_`;
     case 'BOOKING_FAILED':
-      return `❌ *BOOKING FAILED ${getRouteLabel(p.sourceCountry, p.destination)}*\nApplicant: ${p.profileName ?? 'Unknown'}\nError: ${p.errorMessage}\n\n_${ts}_`;
+      return `❌ *BOOKING FAILED ${route}*${centre}\nApplicant: ${p.profileName ?? 'Unknown'}\nError: ${p.errorMessage}\n\n_${ts}_`;
   }
 }
 
 function formatEmailHtml(p: NotificationPayload & { profileName?: string }): { subject: string; html: string } {
+  const destLabel = p.destination ? getCountryLabel(p.destination) : p.destination;
+  const centreText = p.centre && p.sourceCountry
+    ? `<br>Application Centre: ${getCentreLabel(p.sourceCountry, p.centre)}`
+    : '';
+
   switch (p.event) {
     case 'SLOT_DETECTED':
       return {
-        subject: `VFS Slot Available — ${p.destination}`,
-        html: `<h2>Appointment Slot Detected</h2><p>Destination: ${p.destination}<br>Date: ${p.slotDate ?? 'N/A'}</p>`,
+        subject: `VFS Slot Available — ${destLabel}`,
+        html: `<h2>Appointment Slot Detected</h2><p>Destination: ${destLabel}${centreText}<br>Date: ${p.slotDate ?? 'N/A'}</p>`,
       };
     case 'BOOKING_SUCCESS':
       return {
         subject: `Booking Confirmed — ${p.confirmationNo}`,
-        html: `<h2>Appointment Booked Successfully</h2><p>Applicant: ${p.profileName}<br>Destination: ${p.destination}<br>Confirmation: <strong>${p.confirmationNo}</strong></p>`,
+        html: `<h2>Appointment Booked Successfully</h2><p>Applicant: ${p.profileName}<br>Destination: ${destLabel}${centreText}<br>Confirmation: <strong>${p.confirmationNo}</strong></p>`,
       };
     case 'BOOKING_FAILED':
       return {
-        subject: `Booking Failed — ${p.destination}`,
-        html: `<h2>Booking Failed</h2><p>Applicant: ${p.profileName}<br>Destination: ${p.destination}<br>Error: ${p.errorMessage}</p>`,
+        subject: `Booking Failed — ${destLabel}`,
+        html: `<h2>Booking Failed</h2><p>Applicant: ${p.profileName}<br>Destination: ${destLabel}${centreText}<br>Error: ${p.errorMessage}</p>`,
       };
   }
 }

@@ -15,6 +15,7 @@ import { bookingRouter } from '@modules/booking/booking.router';
 import { logsRouter } from '@modules/logs/logs.router';
 import { settingsRouter } from '@modules/settings/settings.router';
 import { proxyRouter } from '@modules/proxy/proxy.router';
+import vfsConfigRouter from '@modules/monitor/vfs-config.router';
 
 export function createApp() {
   const app = express();
@@ -44,6 +45,7 @@ export function createApp() {
   app.use('/api/logs', logsRouter);
   app.use('/api/settings', settingsRouter);
   app.use('/api/proxy', proxyRouter);
+  app.use('/api/vfs-config', vfsConfigRouter);
 
   // ── Error handler (must be last) ─────────────────────────────────────────
   app.use(errorHandler);

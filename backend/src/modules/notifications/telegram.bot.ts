@@ -72,7 +72,8 @@ export function initTelegramBot(): Telegraf | null {
 
     const message = statuses
       .map((s: any) => 
-        `📍 <b>[${escapeHTML(s.sourceCountry?.toUpperCase()) || '??'} → ${escapeHTML(s.destination?.toUpperCase())}]</b>\n` +
+        `📍 <b>[${escapeHTML(s.sourceLabel || s.sourceCountry?.toUpperCase() || '??')} → ${escapeHTML(s.destinationLabel || s.destination?.toUpperCase())}]</b>\n` +
+        `   Centre: <code>${escapeHTML(s.centreLabel || s.centre || 'N/A')}</code>\n` +
         `   Visa: <code>${escapeHTML(s.visaType)}</code>\n` +
         `   Status: ${s.isRunning ? '🟢 Running' : '🔴 Stopped'}\n` +
         `   Mode: ${escapeHTML(s.mode)}\n` +
