@@ -35,3 +35,39 @@ export function invalidateCache(key?: string) {
   if (key) cache.delete(key);
   else cache.clear();
 }
+
+export async function getGlobalSettings() {
+  const settings = await prisma.globalSettings.findUnique({ where: { id: 'singleton' } });
+  return settings || {
+    proxyHost: '',
+    proxyPort: 8080,
+    proxyUsername: '',
+    proxyPassword: '',
+  };
+}
+
+interface GlobalSettingsUpdateData {
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyUsername?: string;
+  proxyPassword?: string;
+}
+
+export async function updateGlobalSettings(data: GlobalSettingsUpdateData) {
+  return await prisma.globalSettings.upsert({
+    where: { id: 'singleton' },
+    update: {
+      proxyHost: data.proxyHost,
+      proxyPort: data.proxyPort,
+      proxyUsername: data.proxyUsername,
+      proxyPassword: data.proxyPassword,
+    },
+    create: {
+      id: 'singleton',
+      proxyHost: data.proxyHost,
+      proxyPort: data.proxyPort ? Number(data.proxyPort) : 8080,
+      proxyUsername: data.proxyUsername,
+      proxyPassword: data.proxyPassword,
+    },
+  });
+}

@@ -1,10 +1,23 @@
 import { Request, Response, NextFunction } from 'express';
-import { startMonitor, stopMonitor, getMonitorStatus } from './monitor.service';
+import { createOrStartMonitor, stopMonitor, getMonitorStatus } from './monitor.service';
 
-export function startMonitorHandler(req: Request, res: Response, next: NextFunction) {
+export async function startMonitorHandler(req: Request, res: Response, next: NextFunction) {
   try {
-    const { destination, visaType, intervalMs, profileIds, mode } = req.body;
-    const id = startMonitor({ destination, visaType, intervalMs: intervalMs ?? 10000, profileIds: profileIds ?? [], mode: mode ?? 'auto' });
+    const {
+      sourceCountry, destination, visaType, intervalMs, profileIds,
+    } = req.body;
+    
+    // We now use createOrStartMonitor so that even after a backend restart,
+    // we can re-populate the in-memory Map from the frontend's request.
+    const id = await createOrStartMonitor({
+      id: req.body.id, // Use existing ID if provided
+      sourceCountry: sourceCountry || 'usa',
+      destination,
+      visaType,
+      intervalMs: intervalMs ?? 30000,
+      profileIds: profileIds ?? [],
+    });
+
     res.json({ monitorId: id, message: 'Monitor started' });
   } catch (err) { next(err); }
 }

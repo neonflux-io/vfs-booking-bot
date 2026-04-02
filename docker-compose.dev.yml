@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -33,6 +31,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
+    shm_size: '512mb'
     restart: unless-stopped
     env_file: .env
     environment:
@@ -45,7 +44,9 @@ services:
     volumes:
       - ./backend/src:/app/src
       - ./backend/prisma:/app/prisma
+      - ./backend/recordings:/app/recordings
       - sessions-data:/app/sessions
+    command: sh -c "npx prisma migrate deploy && npm run dev"
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,6 +66,9 @@ services:
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
+      - ./frontend/tailwind.config.ts:/app/tailwind.config.ts
+      - ./frontend/postcss.config.js:/app/postcss.config.js
+      - ./frontend/package.json:/app/package.json
     depends_on:
       - backend
     networks:

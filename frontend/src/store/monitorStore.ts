@@ -19,10 +19,14 @@ export interface LogEntry {
 interface MonitorStatus {
   id: string;
   destination: string;
+  visaType: string;
   isRunning: boolean;
   lastCheckedAt: string | null;
   slotDetectedCount: number;
+  mode: string;
+  interval: number;
 }
+
 
 interface MonitorStore {
   monitors: MonitorStatus[];

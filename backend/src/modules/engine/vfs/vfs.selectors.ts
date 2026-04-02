@@ -46,42 +46,42 @@ export interface VfsSelectors {
 }
 
 export const DEFAULT_SELECTORS: VfsSelectors = {
-  // Login
-  loginEmail: 'input[type="email"], input[name="email"], #email',
-  loginPassword: 'input[type="password"], input[name="password"], #password',
-  loginSubmit: 'button[type="submit"], input[type="submit"], .login-btn',
+  // Login — Angular Material mat-input sequential IDs (confirmed across VFS global deployments)
+  loginEmail:    'input[id="mat-input-0"]',
+  loginPassword: 'input[id="mat-input-1"]',
+  loginSubmit:   'button[type="submit"]',
 
-  // Country / visa selection
-  countryOfResidenceDropdown: 'select[name*="country"], #countryOfResidence',
-  destinationCountryDropdown: 'select[name*="mission"], #destinationCountry',
-  visaCategoryDropdown: 'select[name*="visa"], #visaCategory',
-  continueButton: 'button:has-text("Continue"), a:has-text("Continue"), .btn-continue',
+  // Country / visa selection — Angular Material mat-select
+  countryOfResidenceDropdown: 'mat-select#mat-select-0, mat-select:nth-of-type(1)',
+  destinationCountryDropdown: 'mat-select#mat-select-1, mat-select:nth-of-type(2)',
+  visaCategoryDropdown:       'mat-select#mat-select-2, mat-select:nth-of-type(3)',
+  continueButton: 'button:has-text("Continue"), button.mat-raised-button:has-text("Next")',
 
-  // Appointment calendar
-  appointmentCalendar: '.calendar, .date-picker, [class*="calendar"]',
-  availableSlot: '.available, .open-slot, td.available, td:not(.disabled):not(.booked)',
-  slotDateCell: 'td[data-date]:not(.disabled)',
-  slotTimeButton: '.time-slot button, .time-slot a, [class*="timeslot"]:not(.disabled)',
-  noSlotsMessage: '.no-slots, .no-appointment, [class*="no-slot"]',
+  // Appointment calendar — Angular Material calendar
+  appointmentCalendar: 'mat-calendar, .mat-calendar',
+  availableSlot:   'td.mat-calendar-body-cell:not(.mat-calendar-body-disabled)',
+  slotDateCell:    'td.mat-calendar-body-cell:not(.mat-calendar-body-disabled)',
+  slotTimeButton:  'mat-radio-button:not(.mat-radio-disabled), .time-slot-option',
+  noSlotsMessage:  ':text("there are no appointments available"), .no-slots-message',
 
-  // Applicant form
-  firstNameInput: 'input[name*="first"], input[name*="given"], #firstName',
-  lastNameInput: 'input[name*="last"], input[name*="surname"], #lastName',
-  passportNumberInput: 'input[name*="passport"], input[name*="document"], #passportNumber',
-  dobInput: 'input[name*="dob"], input[name*="birth"], #dateOfBirth',
-  passportExpiryInput: 'input[name*="expiry"], input[name*="expire"], #passportExpiry',
-  nationalityDropdown: 'select[name*="nationality"], #nationality',
-  emailInput: 'input[type="email"]:not([name*="login"]), input[name*="email"]',
-  phoneInput: 'input[type="tel"], input[name*="phone"], input[name*="mobile"]',
+  // Applicant form — formControlName attributes are stable across VFS Angular versions
+  firstNameInput:      'input[formcontrolname="firstName"], input[id*="firstName"]',
+  lastNameInput:       'input[formcontrolname="lastName"], input[id*="lastName"]',
+  passportNumberInput: 'input[formcontrolname="passportNumber"], input[id*="passport"]',
+  dobInput:            'input[formcontrolname="dateOfBirth"], input[placeholder*="DD/MM/YYYY"]',
+  passportExpiryInput: 'input[formcontrolname="passportExpiry"], input[id*="expiry"]',
+  nationalityDropdown: 'mat-select[formcontrolname="nationality"]',
+  emailInput:          'input[formcontrolname="email"], input[type="email"]:visible',
+  phoneInput:          'input[formcontrolname="contactNumber"], input[type="tel"]',
 
-  // Booking
-  submitButton: 'button:has-text("Submit"), button:has-text("Book"), .btn-submit',
-  confirmButton: 'button:has-text("Confirm"), .btn-confirm',
-  confirmationNumber: '.confirmation-number, .booking-ref, [class*="confirm"] strong',
+  // Booking confirmation
+  submitButton:      'button:has-text("Submit"), button:has-text("Book Appointment")',
+  confirmButton:     'button:has-text("Confirm")',
+  confirmationNumber: '.confirmation-number, strong:has-text("Booking Reference"), [class*="confirm"]',
 
   // Navigation
-  bookAppointmentLink: 'a:has-text("Book Appointment"), a:has-text("New Booking")',
-  logoutLink: 'a:has-text("Logout"), a:has-text("Sign Out"), .logout',
+  bookAppointmentLink: 'a:has-text("Book Appointment"), a:has-text("New Appointment")',
+  logoutLink:          'a:has-text("Logout"), a:has-text("Sign Out"), button:has-text("Sign Out")',
 };
 
 // Runtime selectors (merged with DB overrides on engine startup)

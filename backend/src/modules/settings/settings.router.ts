@@ -1,11 +1,9 @@
 import { Router } from 'express';
-import { requireAuth } from '@middleware/auth.middleware';
-import { requireRole } from '@middleware/rbac.middleware';
-import { Role } from '@prisma/client';
-import { getSettings, updateSettings } from './settings.controller';
+import * as settingsController from './settings.controller';
 
-export const settingsRouter = Router();
+const router = Router();
 
-settingsRouter.use(requireAuth);
-settingsRouter.get('/', getSettings);
-settingsRouter.put('/', requireRole(Role.ADMIN), updateSettings);
+router.get('/', settingsController.getAll);
+router.post('/global', settingsController.updateGlobal);
+
+export const settingsRouter = router;

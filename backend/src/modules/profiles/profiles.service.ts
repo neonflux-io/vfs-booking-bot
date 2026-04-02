@@ -26,6 +26,7 @@ export async function createProfile(dto: CreateProfileDto) {
     data: {
       ...rest,
       passportExpiry: new Date(dto.passportExpiry),
+      passportIssueDate: dto.passportIssueDate ? new Date(dto.passportIssueDate) : null,
       priority: dto.priority as Priority,
       passportNumberEnc,
       dobEnc,
@@ -59,9 +60,11 @@ export async function getProfiles(opts: {
       passportNumberEnc: true,
       dobEnc: true,
       passportExpiry: true,
+      passportIssueDate: true,
       nationality: true,
       email: true,
       phone: true,
+      gender: true,
       priority: true,
       isActive: true,
       createdAt: true,
@@ -103,8 +106,13 @@ export async function updateProfile(id: string, dto: UpdateProfileDto) {
     updates.dobEnc = encrypt(dto.dob);
     delete updates.dob;
   }
-  if (dto.passportExpiry) {
+  if (dto.passportExpiry && dto.passportExpiry !== '') {
     updates.passportExpiry = new Date(dto.passportExpiry);
+  }
+  if (dto.passportIssueDate && dto.passportIssueDate !== '') {
+    updates.passportIssueDate = new Date(dto.passportIssueDate);
+  } else if (dto.passportIssueDate === '') {
+    updates.passportIssueDate = null;
   }
   if (dto.vfsPassword) {
     updates.vfsPasswordEnc = encrypt(dto.vfsPassword);

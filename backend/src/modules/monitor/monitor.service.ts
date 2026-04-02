@@ -1,270 +1,290 @@
+import os from 'os';
 import axios from 'axios';
-import { v4 as uuidv4 } from 'uuid';
-import { MonitorConfig, MonitorState, setMonitor, getMonitor, deleteMonitor, getAllMonitors } from './monitor.state';
-import { enqueueBooking } from '@modules/booking/booking.service';
-import { emitToAll } from '@modules/websocket/ws.server';
+import https from 'https';
+import { prisma } from '@config/database';
+import { env } from '@config/env';
 import { logEvent } from '@modules/logs/logger';
 import { EventType } from '@prisma/client';
-import { SlotInfo } from '@t/index';
-import { AppError } from '@middleware/errorHandler';
+import { decrypt } from '@utils/crypto';
+import { warmSessionWithBrowser, VfsCredentials } from './session.warmer';
 
-// VFS Global availability endpoint (discovered via DevTools network capture)
-// NOTE: This URL/params may change — update via vfs.selectors Settings if needed
-const VFS_AVAILABILITY_URL = 'https://visa.vfsglobal.com/ago/{destination}/en/schedule-appointment/get-slots';
+// --- Types & Constants ---
 
-// Maps UI destination keys → VFS 3-letter country codes used in the URL
-const DESTINATION_CODES: Record<string, string> = {
-  // Europe
-  portugal:       'prt',
-  france:         'fra',
-  germany:        'deu',
-  spain:          'esp',
-  italy:          'ita',
-  netherlands:    'nld',
-  belgium:        'bel',
-  switzerland:    'che',
-  sweden:         'swe',
-  norway:         'nor',
-  denmark:        'dnk',
-  finland:        'fin',
-  austria:        'aut',
-  czechrepublic:  'cze',
-  poland:         'pol',
-  // Americas
-  brazil:         'bra',
-  usa:            'usa',
-  canada:         'can',
-  // Asia-Pacific
-  australia:      'aus',
-  china:          'chn',
-  japan:          'jpn',
-  india:          'ind',
-  // Africa
-  southafrica:    'zaf',
-};
-
-function buildAvailabilityUrl(destination: string): string {
-  const code = DESTINATION_CODES[destination.toLowerCase().replace(/\s+/g, '')];
-  if (!code) throw new Error(`Unsupported destination: ${destination}`);
-  return VFS_AVAILABILITY_URL.replace('{destination}', code);
+export interface SlotInfo {
+  date: string;
+  count: number;
 }
 
-function slotKey(slot: SlotInfo): string {
-  return `${slot.date}:${slot.time}`;
+export interface MonitorConfig {
+  id: string;
+  sourceCountry: string;
+  destination: string;
+  visaType: string;
+  intervalMs: number;
+  profileIds: string[];
 }
 
-async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
+export interface MonitorState extends MonitorConfig {
+  isRunning: boolean;
+  lastCheckedAt?: Date;
+  slotDetectedCount: number;
+  logs: string[];
+  cookies?: string[];
+  cookiesSetAt?: Date;
+  cookiesValid?: boolean;
+  userAgent?: string;
+  secChUa?: string;
+  lastHttpStatus?: number;
+  isCoolingDown?: boolean;
+}
+
+const monitors = new Map<string, MonitorState>();
+const monitorTimeouts = new Map<string, NodeJS.Timeout>();
+
+// Internal Proxy Cache to prevent DB bottlenecks
+const proxyCache = new Map<string, { config: any, expiresAt: number }>();
+const CACHE_TTL = 300000; // 5 minutes
+
+// --- Helper Functions ---
+
+function getSourceCode(name: string): string {
+  const map: Record<string, string> = { 'usa': 'usa', 'united states': 'usa', 'uk': 'gbr', 'pakistan': 'pak' };
+  return map[name.toLowerCase()] || 'usa';
+}
+
+function getDestinationCode(name: string): string {
+  const map: Record<string, string> = { 'portugal': 'prt', 'france': 'fra', 'italy': 'ita', 'spain': 'esp' };
+  return map[name.toLowerCase()] || 'prt';
+}
+
+function buildAvailabilityUrl(source: string, dest: string): string {
+  return `https://visa.vfsglobal.com/${source}/${dest}/en/schedule-appointment/get-slots`;
+}
+
+async function getProxyConfig(id: string) {
+    const cached = proxyCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) return cached.config;
+
+    // Use ENV priority for Proxyrack
+    if (env.PROXY_HOST && env.PROXY_PORT) {
+        const config = {
+            host: env.PROXY_HOST,
+            port: Number(env.PROXY_PORT),
+            auth: env.PROXY_USERNAME ? { username: env.PROXY_USERNAME, password: env.PROXY_PASSWORD } : undefined
+        };
+        proxyCache.set(id, { config, expiresAt: Date.now() + CACHE_TTL });
+        return config;
+    }
+    return null;
+}
+
+/**
+ * Ensures we have valid VFS session cookies. If standard Axios warming fails (403),
+ * we fall back to a full stealth browser warming cycle.
+ */
+async function warmSession(id: string, sourceCode: string, destinationCode: string, visaType: string, credentials?: VfsCredentials): Promise<string[] | undefined> {
+  const state = getMonitor(id);
+  if (state?.cookiesValid && state.cookies && state.cookiesSetAt && (Date.now() - state.cookiesSetAt.getTime() < 1800000)) {
+    return state.cookies;
+  }
+
+  const agent = {
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+    ch: '"Google Chrome";v="134", "Chromium";v="134", "Not:A-Brand";v="24"'
+  };
+
   try {
-    const url = buildAvailabilityUrl(config.destination);
-    const response = await axios.get(url, {
-      timeout: 10_000,
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36',
-      },
-      params: {
-        visaCategory: config.visaType,
-        country: 'AGO',
-      },
+    const proxyConfig = await getProxyConfig(id);
+    const httpProxy = proxyConfig ? { host: proxyConfig.host, port: proxyConfig.port, auth: proxyConfig.auth } : null;
+
+    const response = await axios.get(`https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/login`, {
+      timeout: 180000,
+      headers: { 'User-Agent': agent.ua, 'sec-ch-ua': agent.ch },
+      proxy: httpProxy || undefined,
+      ...(httpProxy && { httpsAgent: new https.Agent({ rejectUnauthorized: false }) }),
     });
 
-    const data = response.data;
-
-    // VFS can return various shapes — try all known structures
-    let raw: Array<{ date?: string; slotDate?: string; time?: string; slotTime?: string }> = [];
-
-    if (Array.isArray(data)) {
-      raw = data;
-    } else if (Array.isArray(data?.slots)) {
-      raw = data.slots;
-    } else if (Array.isArray(data?.data?.slots)) {
-      raw = data.data.slots;
-    } else if (Array.isArray(data?.data)) {
-      raw = data.data;
-    } else if (Array.isArray(data?.availableSlots)) {
-      raw = data.availableSlots;
-    } else {
-      // Unknown structure — log keys so we can adapt selectors in Settings
-      logEvent('warn', EventType.SLOT_DETECTED,
-        `Unknown VFS response for ${config.destination}. Keys: ${Object.keys(data ?? {}).join(', ')}`,
-        { destination: config.destination },
-      );
-      return [];
+    const cookies = response.headers['set-cookie'];
+    if (cookies) {
+      setMonitor(id, { ...getMonitor(id)!, cookies, cookiesSetAt: new Date(), cookiesValid: true, userAgent: agent.ua, secChUa: agent.ch, lastHttpStatus: 200 });
+      return cookies;
     }
-
-    return raw
-      .map((s) => ({
-        date: s.date ?? s.slotDate ?? '',
-        time: s.time ?? s.slotTime ?? '',
-        destination: config.destination,
-        visaType: config.visaType,
-      }))
-      .filter((s) => s.date && s.time);
-  } catch (err) {
-    logEvent('warn', EventType.BOOKING_FAILED,
-      `Monitor fetch error for ${config.destination}: ${(err as Error).message}`,
-      { destination: config.destination },
-    );
-    return [];
-  }
-}
-
-function diffSlots(prev: Set<string>, current: SlotInfo[]): SlotInfo[] {
-  return current.filter((slot) => !prev.has(slotKey(slot)));
-}
-
-// ── Adaptive interval logic ────────────────────────────────────────────────────
-//
-// VFS typically releases appointment slots in short bursts during business hours.
-// We reduce the poll interval when activity is high and relax it during quiet periods
-// to avoid unnecessary requests and reduce IP block risk.
-//
-// Rules (applied in priority order):
-//  1. If slots were just detected → drop to HIGH_DEMAND_MS for the next N polls
-//  2. If current time is within a known high-activity window → use ACTIVE_MS
-//  3. Otherwise → use the user-configured base interval (at least QUIET_MIN_MS)
-
-const HIGH_DEMAND_MS  = 3_000;   // burst mode: slots are appearing right now
-const ACTIVE_MS       = 5_000;   // active window: likely release time
-const QUIET_MIN_MS    = 10_000;  // floor for quiet periods
-
-// High-activity windows in local server time (hour ranges, 24h).
-// VFS Angola appointments typically open around 09:00 and 14:00 WAT.
-const ACTIVE_WINDOWS: Array<{ startHour: number; endHour: number }> = [
-  { startHour: 8,  endHour: 10 },
-  { startHour: 13, endHour: 15 },
-];
-
-function isInActiveWindow(): boolean {
-  const hour = new Date().getHours();
-  return ACTIVE_WINDOWS.some((w) => hour >= w.startHour && hour < w.endHour);
-}
-
-function adaptiveInterval(baseMs: number, consecutiveEmptyPolls: number, justDetected: boolean): number {
-  if (justDetected) return HIGH_DEMAND_MS;
-  if (isInActiveWindow()) return Math.min(baseMs, ACTIVE_MS);
-  // Outside active windows: relax polling but never below QUIET_MIN_MS
-  // Back off slightly when nothing has been seen for a long time
-  const relaxed = consecutiveEmptyPolls > 60 ? baseMs * 2 : baseMs;
-  return Math.max(relaxed, QUIET_MIN_MS);
-}
-
-// ── startMonitor ───────────────────────────────────────────────────────────────
-
-export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
-  const id = uuidv4();
-  const fullConfig: MonitorConfig = { ...config, id };
-
-  const state: MonitorState = {
-    config: fullConfig,
-    isRunning: true,
-    intervalId: null,
-    lastKnownSlots: new Set(),
-    lastCheckedAt: null,
-    slotDetectedCount: 0,
-  };
-  setMonitor(id, state);
-
-  logEvent('info', EventType.MONITOR_STARTED, `Monitor started for ${config.destination}`, {
-    destination: config.destination,
-  });
-  emitToAll('MONITOR_STATUS', { monitorId: id, status: 'started', destination: config.destination });
-
-  // Use recursive setTimeout instead of setInterval so the adaptive delay
-  // is recalculated after every poll (not locked in at creation time).
-  let consecutiveEmptyPolls = 0;
-
-  async function poll() {
-    const current = getMonitor(id);
-    if (!current?.isRunning) return;
-
-    let justDetected = false;
-
-    try {
-      const slots = await fetchAvailableSlots(fullConfig);
-      const newSlots = diffSlots(current.lastKnownSlots, slots);
-
-      setMonitor(id, {
-        ...current,
-        lastKnownSlots: new Set(slots.map(slotKey)),
-        lastCheckedAt: new Date(),
-        slotDetectedCount: current.slotDetectedCount + newSlots.length,
-      });
-
-      if (newSlots.length > 0) {
-        justDetected = true;
-        consecutiveEmptyPolls = 0;
-
-        logEvent('info', EventType.SLOT_DETECTED, `${newSlots.length} new slot(s) detected for ${config.destination}`, {
-          destination: config.destination,
-        });
-
-        emitToAll('SLOT_DETECTED', {
-          monitorId: id,
-          destination: config.destination,
-          slots: newSlots,
-          detectedAt: new Date().toISOString(),
-        });
-
-        if (fullConfig.mode === 'auto') {
-          for (const profileId of fullConfig.profileIds) {
-            for (const slot of newSlots) {
-              await enqueueBooking({
-                profileId,
-                destination: slot.destination,
-                visaType: slot.visaType,
-                slot,
-              });
-            }
-          }
-        }
-      } else {
-        consecutiveEmptyPolls++;
+  } catch (err: any) {
+    const status = err.response?.status;
+    if (status === 403 && credentials) {
+      logEvent('warn', EventType.IP_BLOCKED, `403 Forbidden on standard fetch. Attempting Browser Warming for ${destinationCode}...`);
+      const proxyConfig = await getProxyConfig(id);
+      const result = await warmSessionWithBrowser(sourceCode, destinationCode, credentials, proxyConfig as any);
+      if (result && result.cookies) {
+         setMonitor(id, { ...getMonitor(id)!, cookies: result.cookies, cookiesSetAt: new Date(), cookiesValid: true, userAgent: result.userAgent, secChUa: result.secChUa, lastHttpStatus: 200 });
+         return result.cookies;
       }
-    } catch (err) {
-      consecutiveEmptyPolls++;
-      logEvent('error', EventType.BOOKING_FAILED, `Monitor poll error: ${(err as Error).message}`, {
-        destination: config.destination,
-      });
     }
-
-    // Schedule next poll with adaptive delay
-    const nextDelay = adaptiveInterval(fullConfig.intervalMs, consecutiveEmptyPolls, justDetected);
-    const timeoutId = setTimeout(poll, nextDelay);
-
-    // Store the timeout ID so stopMonitor can cancel it
-    const latest = getMonitor(id);
-    if (latest) setMonitor(id, { ...latest, intervalId: timeoutId as unknown as NodeJS.Timeout });
+    throw err;
   }
-
-  // Kick off first poll immediately
-  const timeoutId = setTimeout(poll, 0);
-  state.intervalId = timeoutId as unknown as NodeJS.Timeout;
-  setMonitor(id, state);
-
-  return id;
+  return undefined;
 }
 
-export function stopMonitor(id: string): void {
-  const state = getMonitor(id);
-  if (!state) throw new AppError(404, 'Monitor not found', 'NOT_FOUND');
+function parseSetCookieToCookieHeader(setCookieHeaders: string[]): string {
+  return setCookieHeaders.map((h) => h.split(';')[0].trim()).join('; ');
+}
 
-  if (state.intervalId) clearTimeout(state.intervalId);
-  state.isRunning = false;
-  deleteMonitor(id);
+async function getVfsCredentials(profileIds: string[]): Promise<VfsCredentials | undefined> {
+  if (!profileIds.length) return undefined;
+  try {
+    const profile = await prisma.profile.findUnique({ where: { id: profileIds[0] }, select: { email: true, vfsPasswordEnc: true } });
+    if (profile?.email && profile?.vfsPasswordEnc) return { email: profile.email, password: decrypt(profile.vfsPasswordEnc) };
+  } catch {}
+  return undefined;
+}
 
-  logEvent('info', EventType.MONITOR_STOPPED, `Monitor stopped`, { destination: state.config.destination });
-  emitToAll('MONITOR_STATUS', { monitorId: id, status: 'stopped' });
+// --- Main Service Logic ---
+
+export function getMonitor(id: string): MonitorState | undefined {
+  return monitors.get(id);
+}
+
+export function setMonitor(id: string, state: MonitorState): void {
+  monitors.set(id, state);
 }
 
 export function getMonitorStatus() {
-  return getAllMonitors().map((m) => ({
-    id: m.config.id,
-    destination: m.config.destination,
-    visaType: m.config.visaType,
+  return Array.from(monitors.values()).map(m => ({
+    id: m.id,
+    sourceCountry: m.sourceCountry,
+    destination: m.destination,
+    visaType: m.visaType,
     isRunning: m.isRunning,
-    lastCheckedAt: m.lastCheckedAt,
+    isCoolingDown: m.isCoolingDown || false,
     slotDetectedCount: m.slotDetectedCount,
-    mode: m.config.mode,
+    lastCheckedAt: m.lastCheckedAt
   }));
+}
+
+export async function createOrStartMonitor(config: MonitorConfig): Promise<string> {
+  const id = config.id || `mon-${Date.now()}`;
+  if (!getMonitor(id)) {
+    setMonitor(id, {
+      ...config,
+      id,
+      isRunning: false,
+      slotDetectedCount: 0,
+      logs: [],
+    });
+  }
+  await startMonitor(id);
+  return id;
+}
+
+export async function startMonitor(id: string): Promise<void> {
+  const current = getMonitor(id);
+  if (!current || current.isRunning) return;
+
+  setMonitor(id, { ...current, isRunning: true, isCoolingDown: false });
+  logEvent('info', EventType.MONITOR_STARTED, `Monitor started for ${current.sourceCountry.toUpperCase()} -> ${current.destination.toUpperCase()}`);
+
+  const poll = async () => {
+    const config = getMonitor(id);
+    if (!config || !config.isRunning) return;
+
+    try {
+      const sourceCode = getSourceCode(config.sourceCountry);
+      const destCode = getDestinationCode(config.destination);
+      const creds = await getVfsCredentials(config.profileIds);
+      
+      const cookies = await warmSession(id, sourceCode, destCode, config.visaType, creds);
+      if (!cookies) throw new Error('Failed to acquire VFS session.');
+
+      const proxyConfig = await getProxyConfig(id);
+      const httpProxy = proxyConfig ? { host: proxyConfig.host, port: proxyConfig.port, auth: proxyConfig.auth } : null;
+
+      const response = await axios.post(buildAvailabilityUrl(sourceCode, destCode), 
+        { visaCategory: config.visaType, country: sourceCode.toUpperCase() }, 
+        {
+          timeout: 180000,
+          headers: {
+            'Cookie': parseSetCookieToCookieHeader(cookies),
+            'User-Agent': config.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+            'X-XSRF-TOKEN': cookies.find(c => c.includes('XSRF-TOKEN'))?.split('=')[1]?.split(';')[0] || '',
+            'Content-Type': 'application/json',
+            'Referer': `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment`,
+          },
+          proxy: httpProxy || undefined,
+          ...(httpProxy && { httpsAgent: new https.Agent({ rejectUnauthorized: false }) }),
+        }
+      );
+
+      const slots = response.data || [];
+      const count = Array.isArray(slots) ? slots.length : 0;
+      
+      setMonitor(id, { ...config, slotDetectedCount: count, lastCheckedAt: new Date(), lastHttpStatus: 200 });
+
+      if (count > 0) {
+        logEvent('info', EventType.SLOT_DETECTED, `Found ${count} slots for ${destCode}!`);
+      }
+
+      const nextPoll = setTimeout(poll, config.intervalMs || 30000);
+      monitorTimeouts.set(id, nextPoll);
+
+    } catch (err: any) {
+      const isTimeout = err.message.includes('Timeout') || err.message.includes('timeout');
+      const status = isTimeout ? 408 : (err.response?.status || (err.message.includes('403') ? 403 : 500));
+      
+      if (status === 403 || status === 408) {
+        const typeStr = status === 403 ? 'IP BLOCKED' : 'VFS SERVER SLOW (TIMEOUT)';
+        const cooldownMs = status === 403 ? 600000 : 300000; // 10m for 403, 5m for Timeout
+        
+        logEvent('warn', EventType.IP_BLOCKED, `${typeStr} for ${config.destination}. COOLDOWN: ${cooldownMs/1000}s`);
+        setMonitor(id, { ...config, isRunning: false, isCoolingDown: true, lastCheckedAt: new Date(), lastHttpStatus: status });
+        
+        setTimeout(() => { if (getMonitor(id)) startMonitor(id); }, cooldownMs);
+        return;
+      }
+
+      logEvent('error', EventType.BOOKING_FAILED, `Monitor poll error: ${err.message}`);
+      const retryPoll = setTimeout(poll, 60000);
+      monitorTimeouts.set(id, retryPoll);
+    }
+  };
+
+  poll();
+}
+
+export async function autoStartMonitors(): Promise<void> {
+  try {
+    const activeBookings = await prisma.booking.findMany({
+      where: { status: { in: ['QUEUED', 'RUNNING'] } },
+      include: { profile: true }
+    });
+
+    const uniqueMonitors = new Set<string>();
+
+    for (const booking of activeBookings) {
+      const key = `${booking.profileId}-${booking.destination}`;
+      if (uniqueMonitors.has(key)) continue;
+      uniqueMonitors.add(key);
+
+      logEvent('info', EventType.MONITOR_STARTED, `Auto-starting monitor for ${booking.destination} (Profile: ${booking.profile.fullName}, Visa: ${booking.visaType})`);
+      await createOrStartMonitor({
+        id: booking.id, // Using the unique Booking ID instead of Profile ID
+        sourceCountry: booking.profile.nationality || 'usa',
+        destination: booking.destination.toLowerCase(),
+        visaType: booking.visaType,
+        intervalMs: 30000,
+        profileIds: [booking.profileId],
+      });
+    }
+  } catch (err: any) {
+    logEvent('error', EventType.BOOKING_FAILED, `Auto-start failed: ${err.message}`);
+  }
+}
+
+export function stopMonitor(id: string): void {
+  const current = getMonitor(id);
+  if (current) setMonitor(id, { ...current, isRunning: false });
+  const timeout = monitorTimeouts.get(id);
+  if (timeout) {
+    clearTimeout(timeout);
+    monitorTimeouts.delete(id);
+  }
 }
