@@ -8,6 +8,11 @@ import {
 } from '@utils/clientHints';
 import { playwrightProxyServer } from '@utils/proxyUrl';
 import { getCountryISO2 } from '@config/vfs-countries';
+import { emitToAll } from '@modules/websocket/ws.server';
+
+function emitPageUpdate(step: string, url: string) {
+  emitToAll('BOT_PAGE_UPDATE', { sessionId: 'monitor', step, url, timestamp: new Date().toISOString() });
+}
 
 // Initialize stealth plugin
 chromium.use(StealthPlugin());
@@ -242,24 +247,13 @@ async function injectStealth(page: any, fingerprint: any, iso2: string | null = 
 }
 
 async function loginAndNavigate(
-  browser: any,
+  context: any,
   sourceCode: string,
   destinationCode: string,
   credentials: VfsCredentials,
 ): Promise<void> {
   const loginUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/login`;
   const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
-
-  const fingerprint = generateFingerprint();
-  const context = await browser.newContext({
-    userAgent: fingerprint.ua,
-    viewport: fingerprint.viewport,
-    extraHTTPHeaders: {
-      'sec-ch-ua': fingerprint.ch,
-      'sec-ch-ua-mobile': '?0',
-      'sec-ch-ua-platform': secChUaPlatformFromUserAgent(fingerprint.ua),
-    },
-  });
 
   const page = await context.newPage();
   await optimizeDataUsage(page);
@@ -269,6 +263,7 @@ async function loginAndNavigate(
   // 🌍 NATURAL ENTRY
   const landingUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/`;
   logEvent('info', EventType.MONITOR_STARTED, `[Warmer] Establishing natural entry via landing page...`);
+  emitPageUpdate('Loading VFS landing page', landingUrl);
   await page.goto(landingUrl, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => null);
   
   const acceptBtn = '#onetrust-accept-btn-handler';
@@ -281,12 +276,12 @@ async function loginAndNavigate(
   await page.mouse.wheel(0, 200 + Math.random() * 300); 
   await HUMAN_DELAY(5000 + Math.random() * 3000);
 
+  emitPageUpdate('Logging in to VFS', loginUrl);
   let response = await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
   const landedTitle = await page.title().catch(() => '');
 
   if (landedTitle === '' || landedTitle.toLowerCase().includes('just a moment')) {
     logEvent('warn', EventType.MONITOR_STARTED, `[Warmer] Detected blank page for ${destinationCode}. Rotating context...`);
-    await context.close();
     throw new Error('PROXY_REPUTATION_LOW: Persistent blank page');
   }
 
@@ -303,8 +298,8 @@ async function loginAndNavigate(
     await page.waitForURL((url: string) => !url.includes('/login'), { timeout: 20000 }).catch(() => null);
   }
 
+  emitPageUpdate('Checking appointment page', scheduleUrl);
   await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  await context.close();
 }
 
 export async function warmSessionWithBrowser(
@@ -319,20 +314,23 @@ export async function warmSessionWithBrowser(
   const browser = await launchBrowser(proxy, countryISO2);
   const fingerprint = generateFingerprint();
   
-  try {
-    if (credentials) {
-      await loginAndNavigate(browser, sourceCode, destinationCode, credentials);
-    } 
+  const context = await browser.newContext({
+    userAgent: fingerprint.ua,
+    viewport: fingerprint.viewport,
+  });
 
-    const context = await browser.newContext({
-        userAgent: fingerprint.ua,
-        viewport: fingerprint.viewport
-    });
+  try {
     const page = await context.newPage();
     await optimizeDataUsage(page);
+
+    if (credentials) {
+      // Login in the SAME context so cookies (incl. XSRF-TOKEN) persist
+      await loginAndNavigate(context, sourceCode, destinationCode, credentials);
+    }
+
     const cookies = await context.cookies();
-    const cookieHeader = cookies.map(c => `${c.name}=${c.value}`);
-    
+    const cookieHeader = cookies.map((c: any) => `${c.name}=${c.value}`);
+
     await browser.close();
     return {
       cookies: cookieHeader,
@@ -355,32 +353,103 @@ export async function fetchSlotsWithBrowser(
   isVerified: boolean,
   credentials?: VfsCredentials,
 ): Promise<any> {
-    const countryISO2 = getCountryISO2(sourceCode);
-    const browser = await launchBrowser(proxy, countryISO2);
-    try {
-        const fingerprint = generateFingerprint();
-        const context = await browser.newContext({
-            userAgent: fingerprint.ua,
-            viewport: fingerprint.viewport,
-        });
+  const countryISO2 = getCountryISO2(sourceCode);
+  const browser = await launchBrowser(proxy, countryISO2);
+  const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
+  const slotsApiUrl  = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment/get-slots`;
 
-        const page = await context.newPage();
-        await optimizeDataUsage(page);
-        const iso2 = getCountryISO2(sourceCode);
-        await injectStealth(page, fingerprint, iso2);
+  logEvent('info', EventType.MONITOR_STARTED, `[BrowserFetch] Single-session slot fetch for ${destinationCode}...`);
 
-        const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
-        await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  try {
+    const fingerprint = generateFingerprint();
+    const context = await browser.newContext({
+      userAgent: fingerprint.ua,
+      viewport: fingerprint.viewport,
+    });
 
-        const title = await page.title().catch(() => '');
-        if (title === '' || title.toLowerCase().includes('just a moment')) {
-            throw new Error('PROXY_REPUTATION_LOW: Blank page during slot fetch');
-        }
+    const page = await context.newPage();
+    await optimizeDataUsage(page);
+    const iso2 = getCountryISO2(sourceCode);
+    await injectStealth(page, fingerprint, iso2);
 
-        await browser.close();
-        return []; 
-    } catch (err: any) {
-        await browser.close();
-        throw err;
+    // Passive listener — grab slots if Angular auto-fires the request
+    let passiveSlotsData: any = null;
+    page.on('response', async (response: any) => {
+      if (response.url().includes('get-slots') && response.status() === 200) {
+        try { passiveSlotsData = await response.json(); } catch {}
+      }
+    });
+
+    if (credentials) {
+      await loginAndNavigate(context, sourceCode, destinationCode, credentials);
+    } else {
+      emitPageUpdate('Fetching appointment slots', scheduleUrl);
+      await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     }
+
+    const title = await page.title().catch(() => '');
+    if (title === '' || title.toLowerCase().includes('just a moment')) {
+      throw new Error('PROXY_REPUTATION_LOW: Blank page during slot fetch');
+    }
+
+    // Wait up to 20s for passive capture
+    await Promise.race([
+      page.waitForResponse(
+        (r: any) => r.url().includes('get-slots') && r.status() === 200,
+        { timeout: 20000 }
+      ).catch(() => null),
+      page.waitForTimeout(20000),
+    ]);
+
+    if (passiveSlotsData) return passiveSlotsData;
+
+    logEvent('info', EventType.MONITOR_STARTED, `[BrowserFetch] No passive capture — extracting XSRF-TOKEN...`);
+
+    // Poll for XSRF-TOKEN — Angular sets it only after its first HTTP request
+    let xsrfCookie: any = null;
+    let xsrfWaited = 0;
+    while (!xsrfCookie && xsrfWaited < 15000) {
+      const liveCookies = await context.cookies();
+      xsrfCookie = liveCookies.find((c: any) => c.name === 'XSRF-TOKEN');
+      if (!xsrfCookie) {
+        await page.waitForTimeout(500);
+        xsrfWaited += 500;
+      }
+    }
+
+    if (!xsrfCookie) {
+      const liveCookies = await context.cookies();
+      const names = liveCookies.map((c: any) => c.name).join(', ');
+      throw new Error(`XSRF-TOKEN not found after 15000ms. Present cookies: [${names || 'none'}]`);
+    }
+
+    const xsrfToken = decodeURIComponent(xsrfCookie.value);
+    logEvent('info', EventType.MONITOR_STARTED, `[BrowserFetch] XSRF-TOKEN acquired — posting to get-slots...`);
+
+    return await page.evaluate(
+      async ({ url, token, src, vCat }: { url: string; token: string; src: string; vCat: string }) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/plain, */*',
+            'X-XSRF-TOKEN': token,
+            'Referer': window.location.href,
+            'Origin': 'https://visa.vfsglobal.com',
+          },
+          credentials: 'include',
+          body: JSON.stringify({ visaCategory: vCat, country: src.toUpperCase() }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        return res.json();
+      },
+      { url: slotsApiUrl, token: xsrfToken, src: sourceCode, vCat: visaCategory }
+    );
+
+  } catch (err: any) {
+    logEvent('error', EventType.BOOKING_FAILED, `[BrowserFetch] Failed: ${err.message}`);
+    throw err;
+  } finally {
+    await browser.close();
+  }
 }

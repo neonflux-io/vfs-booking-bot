@@ -7,11 +7,11 @@ import { useMonitorStore } from '@/store/monitorStore';
 import { cn } from '@/lib/utils';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { MetricCard } from '@/components/dashboard/MetricCard';
-import { Activity, Zap, CheckCircle, Shield, Radio, Terminal, Server, Globe } from 'lucide-react';
+import { Activity, Zap, CheckCircle, Shield, Radio, Terminal, Server, Globe, ExternalLink, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function DashboardPage() {
-  const { liveLogFeed, monitors } = useMonitorStore();
+  const { liveLogFeed, monitors, manualOverride, setManualOverride, botPageState } = useMonitorStore();
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   const { data: bookingData } = useQuery({
@@ -37,7 +37,53 @@ export default function DashboardPage() {
       description="Real-time system telemetry and automation monitoring."
     >
       <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-        
+
+        {/* Live Bot Page — always visible when bot is navigating */}
+        {botPageState && (
+          <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-blue-500/30 bg-blue-500/5 text-blue-300 text-sm">
+            <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse shrink-0" />
+            <span className="text-blue-400 font-semibold shrink-0">{botPageState.step}</span>
+            <span className="text-zinc-500 shrink-0">—</span>
+            <a
+              href={botPageState.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="truncate text-blue-300 hover:text-blue-100 underline underline-offset-2 font-mono text-xs"
+              title={botPageState.url}
+            >
+              {botPageState.url}
+            </a>
+            <ExternalLink className="w-3 h-3 shrink-0 text-blue-500" />
+          </div>
+        )}
+
+        {/* Manual Override Banner — shown when bot is stuck */}
+        {manualOverride && (
+          <div className="flex items-center justify-between gap-4 px-4 py-3 rounded-lg border border-yellow-500/40 bg-yellow-500/10 text-yellow-300">
+            <div className="flex items-center gap-3 min-w-0">
+              <ExternalLink className="w-4 h-4 shrink-0 text-yellow-400" />
+              <span className="text-sm font-medium truncate">
+                Bot is retrying ({manualOverride.reason}) —{' '}
+                <a
+                  href={manualOverride.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-2 hover:text-yellow-100 font-bold"
+                >
+                  Book manually on VFS →
+                </a>
+              </span>
+            </div>
+            <button
+              onClick={() => setManualOverride(null)}
+              className="shrink-0 text-yellow-500 hover:text-yellow-200 transition-colors"
+              aria-label="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* System Health Indicators */}
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20 text-[10px] font-bold text-green-500 uppercase tracking-widest">

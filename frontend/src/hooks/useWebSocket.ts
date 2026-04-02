@@ -2,7 +2,7 @@
 import { useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAuthStore } from '@/store/authStore';
-import { useMonitorStore } from '@/store/monitorStore';
+import { useMonitorStore, ManualOverride, BotPageState } from '@/store/monitorStore';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? '';
 
@@ -10,7 +10,7 @@ let socket: Socket | null = null;
 
 export function useWebSocket() {
   const accessToken = useAuthStore((s) => s.accessToken);
-  const { addSlot, addLogEntry } = useMonitorStore();
+  const { addSlot, addLogEntry, setManualOverride, setBotPageState } = useMonitorStore();
   const connected = useRef(false);
 
   useEffect(() => {
@@ -60,12 +60,20 @@ export function useWebSocket() {
       addLogEntry(entry);
     });
 
+    socket.on('MANUAL_OVERRIDE', (data: ManualOverride) => {
+      setManualOverride(data);
+    });
+
+    socket.on('BOT_PAGE_UPDATE', (data: BotPageState) => {
+      setBotPageState(data);
+    });
+
     return () => {
       socket?.disconnect();
       socket = null;
       connected.current = false;
     };
-  }, [accessToken, addSlot, addLogEntry]);
+  }, [accessToken, addSlot, addLogEntry, setManualOverride, setBotPageState]);
 
   const emit = (event: string, data: unknown) => socket?.emit(event, data);
   const isConnected = () => socket?.connected ?? false;

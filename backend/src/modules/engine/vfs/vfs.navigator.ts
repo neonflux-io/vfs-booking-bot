@@ -8,6 +8,11 @@ import { isSessionExpired } from '../sessionStore';
 import { AppError } from '@middleware/errorHandler';
 import { SlotInfo } from '@t/index';
 import { resolveDestinationCode } from '@config/vfs-countries';
+import { emitToAll } from '@modules/websocket/ws.server';
+
+function emitPageUpdate(sessionId: string, step: string, url: string) {
+  emitToAll('BOT_PAGE_UPDATE', { sessionId, step, url, timestamp: new Date().toISOString() });
+}
 
 /** Helper to block heavy resources (images, fonts, media) to save data/bandwidth */
 async function optimizeDataUsage(page: any) {
@@ -74,6 +79,7 @@ export async function runBookingFlow(
     // Construct dynamic entry URL: https://visa.vfsglobal.com/gbr/prt/en/entry
     const entryUrl = `${VFS_BASE}/${sourceCode.toLowerCase()}/${destCodeUrl}/en/entry`;
     
+    emitPageUpdate(opts.sessionId, 'Navigating to VFS', entryUrl);
     await page.goto(entryUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 45_000,
@@ -85,6 +91,7 @@ export async function runBookingFlow(
     // ── Login (skip if session already active) ───────────────────────────────
     state = 'LOGIN';
     if (isSessionExpired(page.url())) {
+      emitPageUpdate(opts.sessionId, 'Logging in', page.url());
       await performLogin(page, opts.profile.vfsEmail, opts.profile.vfsPassword, opts.sessionId);
     }
 
@@ -93,6 +100,7 @@ export async function runBookingFlow(
 
     // ── Navigate to appointment booking ──────────────────────────────────────
     state = 'SELECT_PARAMS';
+    emitPageUpdate(opts.sessionId, 'Selecting appointment parameters', page.url());
     await clickWithHover(page, sel.bookAppointmentLink);
     await page.waitForLoadState('domcontentloaded');
     await humanDelay(800, 1500);
@@ -128,11 +136,13 @@ export async function runBookingFlow(
 
     // ── Select the target slot ────────────────────────────────────────────────
     state = 'SELECT_SLOT';
+    emitPageUpdate(opts.sessionId, 'Selecting slot', page.url());
     await selectSlot(page, opts.slot);
     await humanDelay(500, 1000);
 
     // ── Fill applicant form ──────────────────────────────────────────────────
     state = 'FILL_FORM';
+    emitPageUpdate(opts.sessionId, 'Filling applicant form', page.url());
     await fillApplicantForm(page, {
       ...opts.profile,
       passportExpiry: opts.profile.passportExpiry.toString(),
@@ -140,13 +150,14 @@ export async function runBookingFlow(
 
     // ── Manual override window ────────────────────────────────────────────────
     state = 'REVIEW';
+    emitPageUpdate(opts.sessionId, 'Reviewing — ready to submit', page.url());
     if (opts.manualOverrideWindowMs && opts.manualOverrideWindowMs > 0) {
       await humanDelay(0, opts.manualOverrideWindowMs);
     }
 
     // ── Submit ────────────────────────────────────────────────────────────────
     state = 'SUBMIT';
-    await checkForBlock(page, opts.sessionId);
+    emitPageUpdate(opts.sessionId, 'Submitting booking', page.url());
     await solveCaptcha(page, opts.sessionId);
 
     await clickWithHover(page, sel.submitButton);

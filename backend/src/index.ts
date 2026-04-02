@@ -1,10 +1,7 @@
 import 'dotenv/config';
-import fs from 'fs';
+import fs from 'fs/promises';
 import http from 'http';
 import { env } from '@config/env';
-
-// Ensure session directory exists (created by Dockerfile in Docker; this handles local dev)
-fs.mkdirSync(env.SESSION_DIR, { recursive: true });
 import { connectDatabase, disconnectDatabase } from '@config/database';
 import { connectRedis, disconnectRedis } from '@config/redis';
 import { createApp } from './app';
@@ -14,6 +11,8 @@ import { startTelegramBot } from '@modules/notifications/telegram.bot';
 
 
 async function bootstrap() {
+  await fs.mkdir(env.SESSION_DIR, { recursive: true });
+
   // Connect to dependencies
   await connectDatabase();
   console.info('✅ Database connected');
@@ -34,10 +33,10 @@ async function bootstrap() {
 
   server.listen(env.PORT, '0.0.0.0', () => {
     console.info(`✅ Server running on http://0.0.0.0:${env.PORT} [${env.NODE_ENV}]`);
-    // 🕒 Interactive Telegram Bot (Re-enabled after stabilization)
-    startTelegramBot().catch(err => {
-      console.error('❌ Background Telegram bot error:', err.message);
-    });
+    // 🕒 Telegram Bot — temporarily disabled (no network access to api.telegram.org)
+    // startTelegramBot().catch(err => {
+    //   console.error('❌ Background Telegram bot error:', err.message);
+    // });
   });
 
   // ── Graceful shutdown ────────────────────────────────────────────────────
@@ -59,4 +58,8 @@ async function bootstrap() {
 bootstrap().catch((err) => {
   console.error('Fatal startup error:', err);
   process.exit(1);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  console.error('Unhandled promise rejection (non-fatal):', reason?.message ?? reason);
 });

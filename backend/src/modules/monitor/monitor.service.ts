@@ -729,7 +729,17 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
         errMsg.toLowerCase().includes('just a moment')
       ) {
         logEvent('warn', EventType.IP_BLOCKED, `Security/Location issue detected (${errMsg.split(':')[0]}). Rotating proxy now...`);
-        
+
+        // 📎 Emit manual fallback URL so operator can book directly while bot retries
+        const manualUrl = `https://visa.vfsglobal.com/${sourceCode}/${config.destination}/en/schedule-appointment`;
+        emitToAll('MANUAL_OVERRIDE', {
+          monitorId: id,
+          url: manualUrl,
+          reason: errMsg.split(':')[0],
+          destination: config.destination,
+          source: sourceCode,
+        });
+
         // 🌀 Critical: Flag as Hot-Swap to keep UI status Green
         const beforeRotate = getMonitor(id);
         if (beforeRotate) {
@@ -737,7 +747,7 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
         }
 
         await rotateProxy(id);
-        
+
         // Reset cooling flags immediately upon swap to ensure Green UI
         const latest = getMonitor(id);
         if (latest) {
