@@ -23,9 +23,14 @@ const envSchema = z.object({
   CAPTCHA_SOLVER: z.enum(['twocaptcha', 'manual']).default('manual'),
 
   PROXY_DEFAULT_PROVIDER: z.string().default('brightdata'),
+  PROXY_HOST: z.string().optional(),
+  PROXY_PORT: z.coerce.number().optional(),
+  PROXY_USERNAME: z.string().optional(),
+  PROXY_PASSWORD: z.string().optional(),
 
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
+  TELEGRAM_PROXY: z.string().optional(),
 
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().default(587),
@@ -42,6 +47,7 @@ const envSchema = z.object({
   MONITOR_DEFAULT_INTERVAL_MS: z.coerce.number().default(10000),
   SESSION_DIR: z.string().default('/app/sessions'),
   BOOKING_MAX_RETRIES: z.coerce.number().default(3),
+  PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

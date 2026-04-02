@@ -88,3 +88,7 @@ export function createCsvExportStream(filter: LogFilter): NodeJS.ReadableStream 
 
   return readable.pipe(csvTransform);
 }
+
+export async function clearLogs() {
+  return prisma.log.deleteMany();
+}
