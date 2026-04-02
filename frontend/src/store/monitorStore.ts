@@ -25,6 +25,9 @@ interface MonitorStatus {
   slotDetectedCount: number;
   mode: string;
   interval: number;
+  isCoolingDown: boolean;
+  cooldownUntil: string | null;
+  applicantNames: string;
 }
 
 

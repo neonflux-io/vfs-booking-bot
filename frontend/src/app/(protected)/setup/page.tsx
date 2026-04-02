@@ -24,6 +24,32 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+// ─── Cooldown Countdown Component ──────────────────────────────────────────
+function CooldownCountdown({ until }: { until: string | null }) {
+  const [timeLeft, setTimeLeft] = useState<string>('00:00');
+
+  useEffect(() => {
+    if (!until) return;
+
+    const updateTimer = () => {
+      const diff = new Date(until).getTime() - Date.now();
+      if (diff <= 0) {
+        setTimeLeft('00:00');
+        return;
+      }
+      const mins = Math.floor(diff / 60000);
+      const secs = Math.floor((diff % 60000) / 1000);
+      setTimeLeft(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+    };
+
+    updateTimer(); // Initial call
+    const timer = setInterval(updateTimer, 1000);
+    return () => clearInterval(timer);
+  }, [until]);
+
+  return <span className="font-mono text-blue-400 drop-shadow-[0_0_8px_rgba(96,165,250,0.5)]">{timeLeft}</span>;
+}
+
 // ─── Types for VFS Config API ────────────────────────────────────────────────
 interface VfsCountry { code: string; label: string; }
 interface VfsCentre { id: string; label: string; address?: string; }
@@ -38,7 +64,7 @@ export default function SetupPage() {
   const [destination, setDestination] = useState('prt');
   const [centre, setCentre] = useState('');
   const [visaType, setVisaType] = useState('');
-  const [intervalMs, setIntervalMs] = useState(10000);
+  const [intervalMs, setIntervalMs] = useState(30000);
   const [mode, setMode] = useState<'auto' | 'manual'>('auto');
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>([]);
   const [proxy, setProxy] = useState<{ 
@@ -414,13 +440,28 @@ export default function SetupPage() {
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, scale: 0.9 }}
-                  className="card p-5 bg-card/60 border-l-4 border-l-green-500 group"
+                  className={cn(
+                    "card p-5 bg-card/60 transition-all group overflow-hidden border-l-4",
+                    m.isCoolingDown ? "border-l-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.1)]" : "border-l-green-500"
+                  )}
                 >
+                  {m.isCoolingDown && (
+                    <div className="absolute top-0 right-0 px-3 py-1 bg-blue-500 text-[9px] font-black uppercase text-white tracking-widest animate-in slide-in-from-right duration-300">
+                      ❄️ ICE State Active
+                    </div>
+                  )}
+
                   <div className="flex items-start justify-between mb-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center text-green-500 relative">
-                        <Zap className="w-5 h-5 fill-current" />
-                        <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-green-500 animate-ping opacity-50" />
+                      <div className={cn(
+                        "w-10 h-10 rounded-xl flex items-center justify-center relative",
+                        m.isCoolingDown ? "bg-blue-500/20 text-blue-500" : "bg-green-500/10 text-green-500"
+                      )}>
+                        <Zap className={cn("w-5 h-5 fill-current transition-colors", m.isCoolingDown && "animate-pulse")} />
+                        <span className={cn(
+                          "absolute -top-1 -right-1 w-3 h-3 rounded-full animate-ping opacity-50",
+                          m.isCoolingDown ? "bg-blue-500" : "bg-green-500"
+                        )} />
                       </div>
                       <div>
                         <h4 className="text-sm font-bold uppercase tracking-tight">
@@ -445,14 +486,20 @@ export default function SetupPage() {
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4 pt-4 border-t border-dashed">
+                  <div className="grid grid-cols-2 gap-4 pt-4 border-t border-dashed relative z-10">
                      <div className="space-y-1">
                         <p className="text-[9px] uppercase font-black text-muted-foreground tracking-widest">Slots Captured</p>
-                        <p className="text-sm font-black text-green-500">{m.slotDetectedCount}</p>
+                        <p className={cn("text-sm font-black italic", m.isCoolingDown ? "text-blue-400" : "text-green-500")}>
+                          {m.slotDetectedCount}
+                        </p>
                      </div>
                      <div className="space-y-1">
-                        <p className="text-[9px] uppercase font-black text-muted-foreground tracking-widest">Current Latency</p>
-                        <p className="text-sm font-mono font-bold">{(m.interval || 0).toFixed(1)}s</p>
+                        <p className="text-[9px] uppercase font-black text-muted-foreground tracking-widest leading-none">
+                          {m.isCoolingDown ? 'Next Check In' : 'Current Rate'}
+                        </p>
+                        <p className={cn("text-sm font-mono font-bold pt-1", m.isCoolingDown ? "text-blue-400" : "text-zinc-100")}>
+                          {m.isCoolingDown ? <CooldownCountdown until={m.cooldownUntil} /> : `${(m.interval / 1000 || 0).toFixed(1)}s`}
+                        </p>
                      </div>
                   </div>
 
@@ -461,11 +508,20 @@ export default function SetupPage() {
                        <motion.div 
                         initial={{ width: "0%" }}
                         animate={{ width: "100%" }}
-                        transition={{ duration: m.interval || 5, repeat: Infinity, ease: "linear" }}
-                        className="h-full bg-green-500/50"
+                        transition={{ 
+                          duration: m.isCoolingDown ? 5.0 : (m.interval / 1000 || 5), 
+                          repeat: Infinity, 
+                          ease: "linear" 
+                        }}
+                        className={cn("h-full", m.isCoolingDown ? "bg-blue-500/50" : "bg-green-500/50")}
                        />
                     </div>
-                    <span className="text-[9px] text-muted-foreground uppercase font-bold tracking-tighter">Syncing...</span>
+                    <span className={cn(
+                      "text-[9px] uppercase font-black tracking-tighter italic",
+                      m.isCoolingDown ? "text-blue-500 animate-pulse" : "text-muted-foreground"
+                    )}>
+                      {m.isCoolingDown ? 'Frozen (Cooling)...' : 'Syncing...'}
+                    </span>
                   </div>
                 </motion.div>
               ))}

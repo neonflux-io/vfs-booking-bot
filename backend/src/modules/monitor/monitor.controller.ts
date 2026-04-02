@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { env } from '@config/env';
 import { startMonitor, stopMonitor, getMonitorStatus } from './monitor.service';
 
 export function startMonitorHandler(req: Request, res: Response, next: NextFunction) {
@@ -12,7 +13,7 @@ export function startMonitorHandler(req: Request, res: Response, next: NextFunct
       destination,
       centre: centre || '',
       visaType,
-      intervalMs: intervalMs ?? 10000,
+      intervalMs: intervalMs ?? env.MONITOR_DEFAULT_INTERVAL_MS,
       profileIds: profileIds ?? [],
       mode: mode ?? 'auto',
       proxy: proxy ?? undefined,
@@ -32,6 +33,11 @@ export function stopMonitorHandler(req: Request, res: Response, next: NextFuncti
   } catch (err) { next(err); }
 }
 
-export function statusHandler(_req: Request, res: Response) {
-  res.json(getMonitorStatus());
+export async function statusHandler(_req: Request, res: Response) {
+  try {
+    const status = await getMonitorStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch monitor status' });
+  }
 }

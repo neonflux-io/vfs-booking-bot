@@ -1,5 +1,4 @@
 import axios from 'axios';
-import https from 'https';
 import { v4 as uuidv4 } from 'uuid';
 import { MonitorConfig, MonitorState, setMonitor, getMonitor, deleteMonitor, getAllMonitors } from './monitor.state';
 import { enqueueBooking } from '@modules/booking/booking.service';
@@ -16,6 +15,8 @@ import { warmSessionWithBrowser, fetchSlotsWithBrowser, VfsCredentials } from '.
 import { decrypt } from '@utils/crypto';
 import { getCachedSlots, setCachedSlots } from './slot.cache';
 import { resolveSourceCode, resolveDestinationCode, getCountryLabel, getCentreLabel } from '@config/vfs-countries';
+import { secChUaPlatformFromUserAgent } from '@utils/clientHints';
+import { axiosProxyTunnelOptions } from '@utils/proxyUrl';
 
 // VFS Global availability endpoint (discovered via DevTools network capture)
 // NOTE: This URL/params may change — update via vfs.selectors Settings if needed
@@ -65,15 +66,47 @@ function slotKey(slot: SlotInfo): string {
 async function getProxyConfig(id: string) {
   const current = getMonitor(id);
   const monitorProxy = current?.config?.proxy;
+  const sessionId = current?.proxySessionId;
+
+  const buildAuth = (user: string | undefined, pass: string | undefined, host: string) => {
+    if (!user) return undefined;
+    
+    // 💎 Zero-Frustration: Force UK-Only Residential IPs for ProxyRack
+    let finalUser = user;
+    if (host.includes('proxyrack.net')) {
+      const geo = env.PROXY_STICKY_GEO;
+      const suffix = geo ? `-country-${geo}` : '';
+      if (sessionId) {
+        finalUser = suffix ? `${user}${suffix};session=${sessionId}` : `${user};session=${sessionId}`;
+      } else {
+        finalUser = `${user}${suffix}`;
+      }
+    }
+
+    return {
+      username: finalUser,
+      password: pass || '',
+    };
+  };
 
   if (monitorProxy?.host) {
+    // 💎 Final Truth: SOCKS5 Protocol Shift for ProxyRack
+    let finalPort = monitorProxy.port;
+    let finalHost = monitorProxy.host;
+    if (monitorProxy.host.includes('proxyrack.net')) {
+       // SOCKS5 is much more robust for tunneled residential IPs
+       finalHost = `socks5://${monitorProxy.host}`;
+       if (finalPort >= 10000) {
+         // 🏁 100-Port Stealth Shuffle: Use a massive pool of entry nodes
+         const offset = sessionId ? (parseInt(sessionId.substring(0, 2), 16) || 0) % 100 : 0;
+         finalPort = monitorProxy.port + offset;
+       }
+    }
+
     return {
-      host: monitorProxy.host,
-      port: monitorProxy.port,
-      auth: monitorProxy.username ? {
-        username: monitorProxy.username,
-        password: monitorProxy.password || '',
-      } : undefined,
+      host: finalHost,
+      port: finalPort,
+      auth: buildAuth(monitorProxy.username, monitorProxy.password, monitorProxy.host),
     };
   }
 
@@ -83,22 +116,16 @@ async function getProxyConfig(id: string) {
     return {
       host: global.proxyHost,
       port: global.proxyPort || 8080,
-      auth: global.proxyUsername ? {
-        username: global.proxyUsername,
-        password: global.proxyPassword || '',
-      } : undefined,
+      auth: buildAuth(global.proxyUsername || undefined, global.proxyPassword || undefined, global.proxyHost),
     };
   }
 
-  // Final fallback: use .env proxy credentials (Bright Data residential proxy)
+  // Final fallback: use .env proxy credentials
   if (env.PROXY_HOST && env.PROXY_PORT) {
     return {
       host: env.PROXY_HOST,
       port: env.PROXY_PORT,
-      auth: env.PROXY_USERNAME ? {
-        username: env.PROXY_USERNAME,
-        password: env.PROXY_PASSWORD || '',
-      } : undefined,
+      auth: buildAuth(env.PROXY_USERNAME, env.PROXY_PASSWORD, env.PROXY_HOST),
     };
   }
 
@@ -117,6 +144,9 @@ async function rotateProxy(id: string) {
   const current = getMonitor(id);
   if (!current) return;
 
+  // 🌀 Generate a new session ID for ProxyRack IP rotation
+  const newSessionId = Math.random().toString(36).substring(2, 10).toUpperCase();
+
   // Track the failure of the current proxy in DB
   if (current.config.proxy?.host) {
     await prisma.proxy.updateMany({
@@ -130,10 +160,18 @@ async function rotateProxy(id: string) {
     const p = await prisma.proxy.findFirst({ where: { host: current.config.proxy.host } });
     if (p && p.blockCount >= 5) {
       await prisma.proxy.update({ where: { id: p.id }, data: { status: 'BLOCKED' } });
-      logEvent('error', EventType.IP_BLOCKED, `Proxy ${p.host} has been permanently blacklisted.`, { destination: current.config.destination });
+      logEvent('error', EventType.IP_BLOCKED, `Proxy ${p.host} has been blacklisted. Status: BLOCKED`, { destination: current.config.destination });
+    }
+
+    // Expert Rotation: Update session for current ProxyRack host
+    if (current.config.proxy.host.includes('proxyrack.net')) {
+      logEvent('info', EventType.IP_BLOCKED, `🔄 Triggering IP Rotation for ProxyRack session for ${current.config.destination} (New: ${newSessionId})`);
+      setMonitor(id, { ...current, proxySessionId: newSessionId });
+      return; 
     }
   }
 
+  // Switch to a completely different proxy if one exists in the pool
   const proxies = await prisma.proxy.findMany({
     where: { 
       status: 'ACTIVE',
@@ -148,6 +186,7 @@ async function rotateProxy(id: string) {
     if (latest) {
       setMonitor(id, {
         ...latest,
+        proxySessionId: newSessionId, // Always rotate session when switching
         config: {
           ...latest.config,
           proxy: {
@@ -183,6 +222,7 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
     const url = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
     const httpProxy = await getProxyConfig(id); // warm GET always uses proxy (datacenter IPs are blocked for page loads)
     const agent = getRandomAgent();
+    const tunnel = axiosProxyTunnelOptions(httpProxy || false);
     const response = await axios.get(url, {
       timeout: 15_000,
       headers: {
@@ -199,10 +239,9 @@ async function warmSession(id: string, sourceCode: string, destinationCode: stri
         'Referer': 'https://visa.vfsglobal.com/',
         'sec-ch-ua': agent.ch,
         'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-platform': secChUaPlatformFromUserAgent(agent.ua),
       },
-      proxy: httpProxy || undefined,
-      ...(httpProxy && { httpsAgent: new https.Agent({ rejectUnauthorized: false }) }),
+      ...tunnel,
     });
 
     const cookies = response.headers['set-cookie'];
@@ -327,6 +366,7 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
 
     let data: any;
     try {
+      const slotTunnel = axiosProxyTunnelOptions(proxyConfig || false);
       const response = await axios.post(url, payload, {
         timeout: 15_000,
         headers: {
@@ -339,13 +379,12 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
           ...(xsrfToken && { 'X-XSRF-TOKEN': xsrfToken }),
           'sec-ch-ua': agent.ch,
           'sec-ch-ua-mobile': '?0',
-          'sec-ch-ua-platform': '"Windows"',
+          'sec-ch-ua-platform': secChUaPlatformFromUserAgent(agent.ua),
           'sec-fetch-dest': 'empty',
           'sec-fetch-mode': 'cors',
           'sec-fetch-site': 'same-origin',
         },
-        proxy: proxyConfig || undefined,
-        ...(proxyConfig && { httpsAgent: new https.Agent({ rejectUnauthorized: false }) }),
+        ...slotTunnel,
       });
       data = response.data;
     } catch (err: any) {
@@ -602,13 +641,24 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
           destination: config.destination,
         });
 
+        // Resolve applicant names for nice notification
+        let applicantNames = '';
+        if (env.TELEGRAM_SHOW_APPLICANT_NAMES) {
+          const profiles = await prisma.profile.findMany({
+            where: { id: { in: fullConfig.profileIds } },
+            select: { fullName: true }
+          });
+          applicantNames = profiles.map(p => p.fullName).join(', ');
+        }
+
         // Trigger Global Notifications (Telegram, Email, Push)
         await dispatchNotification({
           event: 'SLOT_DETECTED',
           sourceCountry: config.sourceCountry,
           destination: config.destination,
           visaType: config.visaType,
-          slotDate: newSlots[0].date // Notify about the first/earliest slot
+          slotDate: newSlots[0].date, // Notify about the first/earliest slot
+          applicantNames
         });
 
         emitToAll('SLOT_DETECTED', {
@@ -637,9 +687,16 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
       }
     } catch (err) {
       consecutiveEmptyPolls++;
-      logEvent('error', EventType.BOOKING_FAILED, `Monitor poll error: ${(err as Error).message}`, {
+      const errMsg = (err as Error).message;
+      logEvent('error', EventType.BOOKING_FAILED, `Monitor poll error: ${errMsg}`, {
         destination: config.destination,
       });
+
+      // 🧪 NEW: If it's a 403 or VFS_SERVER_ERROR, trigger the cooldown immediately
+      if (errMsg.includes('403') || errMsg.includes('VFS_SERVER_ERROR')) {
+        const latest = getMonitor(id);
+        if (latest) setMonitor(id, { ...latest, lastHttpStatus: 403 }); // Mark as blocked/error
+      }
     }
 
     // Schedule next poll with adaptive delay
@@ -650,14 +707,66 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
     });
 
     // Re-fetch latest monitor state to avoid race conditions with 403 status
-    const latestState = getMonitor(id);
+    const latestStateBeforeCooldown = getMonitor(id);
 
-    // Exponential backoff for 403 Forbidden errors to cool down the IP
-    if (latestState?.lastHttpStatus === 403) {
-      nextDelay = Math.max(nextDelay * 5, 120_000); // Wait at least 2 minutes if blocked
-      logEvent('info', EventType.MONITOR_STARTED, `403 detected for ${config.destination}. Strictly cooling down for ${Math.floor(nextDelay / 1000)}s`, {
-        destination: config.destination,
-      });
+    // If we just finished a cooldown or were successful, ensure we reset flags
+    if (latestStateBeforeCooldown?.isCoolingDown && !latestStateBeforeCooldown.lastHttpStatus) {
+      setMonitor(id, { ...latestStateBeforeCooldown, isCoolingDown: false, cooldownUntil: null });
+      emitToAll('MONITOR_STATUS', { monitorId: id, isCoolingDown: false, status: 'running' });
+    }
+
+    // Strictly 300s (5-min) cooldown for 403 Forbidden or Unexpected Server errors
+    const latestState = getMonitor(id);
+    const isErrorOrBlock = latestState?.lastHttpStatus === 403;
+
+      if (isErrorOrBlock) {
+        nextDelay = env.VFS_COOLDOWN_MS; 
+        const cooldownUntil = new Date(Date.now() + nextDelay);
+        
+        // 🌀 Expert Rotation: Instantly switch session for ProxyRack or host-switch for pool
+        await rotateProxy(id);
+
+        logEvent('info', EventType.MONITOR_STARTED, `403/500 detected for ${config.destination}. Strictly cooling down for ${env.VFS_COOLDOWN_MS / 1000}s`, {
+          destination: config.destination,
+        });
+
+        // Update state for frontend/telegram visibility
+        const latestStateAfterRotate = getMonitor(id);
+        if (latestStateAfterRotate) {
+          setMonitor(id, { 
+            ...latestStateAfterRotate, 
+            isCoolingDown: true, 
+            cooldownUntil,
+          });
+          
+          // Notify Frontend
+          emitToAll('MONITOR_STATUS', { 
+            monitorId: id, 
+            status: 'cooling_down', 
+            isCoolingDown: true, 
+            cooldownUntil 
+          });
+
+          // Notify Telegram
+          const srcLabel = getCountryLabel(latestStateAfterRotate.config.sourceCountry);
+          const dstLabel = getCountryLabel(latestStateAfterRotate.config.destination);
+          const applicantNames = env.TELEGRAM_SHOW_APPLICANT_NAMES 
+            ? (latestStateAfterRotate.config.profileIds?.length > 0 ? `for <b>${latestStateAfterRotate.config.profileIds.length} applicants</b>` : '')
+            : '(Names Hidden)';
+
+          const { sendTelegram } = require('@modules/notifications/telegram.bot');
+          sendTelegram(
+            `❄️ <b>VFS Cooldown Started</b>\n\n` +
+            `📍 Route: <b>${srcLabel} → ${dstLabel}</b>\n` +
+            `👤 Action: Cooling down ${applicantNames}\n` +
+            `🛡 <b>IP Rotated</b>: Automated session rotation active.\n` +
+            `⏱ Resume at: <code>${cooldownUntil.toLocaleTimeString()}</code>`
+          );
+        }
+      
+      // Reset status for next check (after cooldown finishes)
+      const latest = getMonitor(id);
+      if (latest) setMonitor(id, { ...latest, lastHttpStatus: 0 });
     }
 
     const timeoutId = setTimeout(poll, nextDelay);
@@ -687,22 +796,40 @@ export function stopMonitor(id: string): void {
   emitToAll('MONITOR_STATUS', { monitorId: id, status: 'stopped' });
 }
 
-export function getMonitorStatus() {
-  return getAllMonitors().map((m) => ({
-    id: m.config.id,
-    sourceCountry: m.config.sourceCountry,
-    destination: m.config.destination,
-    centre: m.config.centre,
-    visaType: m.config.visaType,
-    isRunning: m.isRunning,
-    lastCheckedAt: m.lastCheckedAt,
-    slotDetectedCount: m.slotDetectedCount,
-    mode: m.config.mode,
-    lastHttpStatus: m.lastHttpStatus,
-    interval: m.config.intervalMs,
-    sourceLabel: getCountryLabel(m.config.sourceCountry),
-    destinationLabel: getCountryLabel(m.config.destination),
-    centreLabel: getCentreLabel(m.config.sourceCountry, m.config.centre),
-  }));
+export async function getMonitorStatus() {
+  const monitors = getAllMonitors();
+  
+  // Resolve applicant names
+  const allProfiles = await prisma.profile.findMany({
+    select: { id: true, fullName: true }
+  });
+  const profileMap = new Map(allProfiles.map(p => [p.id, p.fullName]));
+
+  return monitors.map((m) => {
+    const names = env.TELEGRAM_SHOW_APPLICANT_NAMES 
+      ? (m.config.profileIds?.map((id: string) => profileMap.get(id) || 'Unknown').join(', ') || 'None')
+      : '(Names Hidden)';
+
+    return {
+      id: m.config.id,
+      sourceCountry: m.config.sourceCountry,
+      destination: m.config.destination,
+      centre: m.config.centre,
+      visaType: m.config.visaType,
+      isRunning: m.isRunning,
+      lastCheckedAt: m.lastCheckedAt,
+      slotDetectedCount: m.slotDetectedCount,
+      mode: m.config.mode,
+      lastHttpStatus: m.lastHttpStatus,
+      interval: m.config.intervalMs,
+      sourceLabel: getCountryLabel(m.config.sourceCountry),
+      destinationLabel: getCountryLabel(m.config.destination),
+      centreLabel: getCentreLabel(m.config.sourceCountry, m.config.centre),
+      profileIds: m.config.profileIds,
+      applicantNames: names,
+      isCoolingDown: m.isCoolingDown || false,
+      cooldownUntil: m.cooldownUntil || null,
+    };
+  });
 }
 

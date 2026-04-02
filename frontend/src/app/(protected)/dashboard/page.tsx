@@ -167,18 +167,49 @@ export default function DashboardPage() {
                 Active Targets
               </h3>
               <div className="space-y-4">
-                {monitors.slice(0, 3).map((m, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-background border">
-                    <div className="flex flex-col">
-                      <span className="text-xs font-bold uppercase">{m.destination}</span>
-                      <span className="text-[10px] text-muted-foreground">{m.visaType}</span>
+                {monitors.map((m, i) => (
+                  <div key={i} className={cn(
+                    "relative flex flex-col p-3 rounded-lg bg-background border transition-all overflow-hidden",
+                    m.isCoolingDown ? "border-blue-500/50 bg-blue-500/5" : "border-zinc-800"
+                  )}>
+                    {m.isCoolingDown && (
+                      <div className="absolute top-0 right-0 px-2 py-0.5 bg-blue-500 text-[8px] font-black uppercase tracking-tighter text-white animate-pulse">
+                        Cooling Down
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-primary">{m.destination}</span>
+                        <span className="text-[9px] text-zinc-500 font-mono italic">{m.visaType}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-[10px] font-mono">
+                        <Activity className={cn("w-3 h-3", m.isRunning ? "text-green-500" : "text-zinc-600")} />
+                        {m.interval}s
+                      </div>
                     </div>
-                    <div className="px-2 py-1 rounded bg-accent text-[10px] font-mono">
-                      {m.interval}s
+
+                    <div className="flex items-center gap-2 mt-1 pt-2 border-t border-zinc-900">
+                      <div className="p-1 px-1.5 rounded-md bg-zinc-950 border border-zinc-800 text-[10px] text-zinc-400 flex items-center gap-1.5 w-full">
+                        <Globe className="w-3 h-3 text-zinc-600" />
+                        <span className="truncate flex-1">{m.applicantNames}</span>
+                      </div>
                     </div>
+
+                    {m.isCoolingDown && m.cooldownUntil && (
+                      <div className="mt-2 text-[9px] font-mono text-blue-400 flex items-center gap-1.5">
+                        <Zap className="w-2.5 h-2.5 animate-pulse" />
+                        Resume: {new Date(m.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    )}
                   </div>
                 ))}
-                {monitors.length === 0 && <p className="text-xs text-muted-foreground italic text-center py-4">No active monitors</p>}
+                {monitors.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-8 opacity-20 italic">
+                    <Activity className="w-8 h-8 mb-2" />
+                    <p className="text-[10px] uppercase font-bold tracking-widest">No active monitors</p>
+                  </div>
+                )}
               </div>
             </div>
 

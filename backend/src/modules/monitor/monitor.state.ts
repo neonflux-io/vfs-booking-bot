@@ -35,6 +35,9 @@ export interface MonitorState {
   userAgent?: string;
   secChUa?: string;
   earlySlotData?: any;   // set by warming browser when in-session fetch succeeds
+  isCoolingDown?: boolean;
+  cooldownUntil?: Date | null;
+  proxySessionId?: string; // Opt 4: dynamic session string for rotating IP (e.g. ProxyRack)
 }
 
 // In-memory map of active monitors

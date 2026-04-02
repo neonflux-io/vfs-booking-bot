@@ -197,7 +197,7 @@ async function main() {
     { key: 'notifications.push.enabled', value: false },
     { key: 'notifications.sms.enabled', value: false },
     { key: 'captcha.solver', value: 'manual' },
-    { key: 'monitor.defaultIntervalMs', value: 10000 },
+    { key: 'monitor.defaultIntervalMs', value: 30000 },
     { key: 'booking.concurrency', value: 3 },
     { key: 'booking.maxRetries', value: 3 },
     { key: 'booking.parallelTabs', value: 2 },

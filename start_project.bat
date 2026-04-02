@@ -7,15 +7,15 @@ echo   VFS GLOBAL BOOKING BOT - QUICK START ENGINE
 echo ============================================================
 echo.
 
-:: Check for .env file
-if not exist .env (
-    echo [! ] Root .env file not found.
-    echo [* ] Creating .env from .env.example...
-    copy .env.example .env
-    echo [SUCCESS] .env created.
-    echo [! ] IMPORTANT: Open .env and add your TELEGRAM_BOT_TOKEN and other keys.
-    timeout /t 5
+:: Ensure .env exists and has JWT / encryption secrets (backend will not start without them)
+echo [* ] Preparing .env (auto-fill dev secrets if missing)...
+node scripts\bootstrap-env.cjs
+if %errorlevel% neq 0 (
+    echo [ERROR] Node.js is required for scripts\bootstrap-env.cjs — install Node or copy .env.example to .env and fill secrets manually.
+    pause
+    exit /b 1
 )
+echo [! ] Still add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env for Telegram commands.
 
 :: Check for backend/.env file
 if not exist backend\.env (

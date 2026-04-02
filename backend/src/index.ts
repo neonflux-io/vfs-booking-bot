@@ -10,7 +10,7 @@ import { connectRedis, disconnectRedis } from '@config/redis';
 import { createApp } from './app';
 import { initWebSocket } from '@modules/websocket/ws.server';
 import { startBookingWorker, stopBookingWorker } from '@modules/booking/booking.worker';
-import { initTelegramBot } from '@modules/notifications/telegram.bot';
+import { startTelegramBot } from '@modules/notifications/telegram.bot';
 
 
 async function bootstrap() {
@@ -32,12 +32,12 @@ async function bootstrap() {
   startBookingWorker();
   console.info('✅ Booking worker started');
 
-  // Interactive Telegram Bot
-  initTelegramBot();
-
-
-  server.listen(env.PORT, () => {
-    console.info(`✅ Server running on port ${env.PORT} [${env.NODE_ENV}]`);
+  server.listen(env.PORT, '0.0.0.0', () => {
+    console.info(`✅ Server running on http://0.0.0.0:${env.PORT} [${env.NODE_ENV}]`);
+    // 🕒 Interactive Telegram Bot (Re-enabled after stabilization)
+    startTelegramBot().catch(err => {
+      console.error('❌ Background Telegram bot error:', err.message);
+    });
   });
 
   // ── Graceful shutdown ────────────────────────────────────────────────────

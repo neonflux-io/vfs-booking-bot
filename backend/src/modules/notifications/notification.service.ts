@@ -8,6 +8,7 @@ import { getCountryLabel, getCentreLabel } from '@config/vfs-countries';
 interface NotificationPayload {
   event: 'SLOT_DETECTED' | 'BOOKING_SUCCESS' | 'BOOKING_FAILED';
   profileId?: string;
+  applicantNames?: string; // Comma-separated names for multiple applicants
   sourceCountry?: string;
   destination?: string;
   centre?: string;
@@ -34,16 +35,31 @@ function getCentreDisplay(source?: string, centre?: string): string {
 }
 
 function formatTelegramMessage(p: NotificationPayload & { profileName?: string }): string {
-  const ts = new Date().toISOString();
+  const ts = new Date().toLocaleTimeString();
   const route = getRouteLabel(p.sourceCountry, p.destination);
   const centre = getCentreDisplay(p.sourceCountry, p.centre);
+  const applicants = p.applicantNames || p.profileName || 'Unknown';
+
   switch (p.event) {
     case 'SLOT_DETECTED':
-      return `🟡 *SLOT DETECTED ${route}*${centre}\nVisa: ${getVisaLabel(p.visaType)}\nDate: ${p.slotDate ?? 'N/A'}\n\n_${ts}_`;
+      return `🔔 <b>SLOT DETECTED</b>\n\n` +
+             `📍 <b>Route:</b> ${route}${centre}\n` +
+             `🎫 <b>Visa:</b> <code>${getVisaLabel(p.visaType)}</code>\n` +
+             `📅 <b>Date:</b> <code>${p.slotDate ?? 'N/A'}</code>\n` +
+             `👤 <b>Applicants:</b> ${applicants}\n\n` +
+             `🕒 <i>Detected at ${ts}</i>`;
     case 'BOOKING_SUCCESS':
-      return `✅ *BOOKING CONFIRMED ${route}*${centre}\nApplicant: ${p.profileName ?? 'Unknown'}\nRef: \`${p.confirmationNo}\`\n\n_${ts}_`;
+      return `✅ <b>BOOKING CONFIRMED</b>\n\n` +
+             `📍 <b>Route:</b> ${route}${centre}\n` +
+             `👤 <b>Applicant:</b> ${p.profileName || 'Unknown'}\n` +
+             `📄 <b>Ref No:</b> <code>${p.confirmationNo}</code>\n\n` +
+             `🕒 <i>${ts}</i>`;
     case 'BOOKING_FAILED':
-      return `❌ *BOOKING FAILED ${route}*${centre}\nApplicant: ${p.profileName ?? 'Unknown'}\nError: ${p.errorMessage}\n\n_${ts}_`;
+      return `❌ <b>BOOKING FAILED</b>\n\n` +
+             `📍 <b>Route:</b> ${route}${centre}\n` +
+             `👤 <b>Applicant:</b> ${p.profileName || 'Unknown'}\n` +
+             `⚠️ <b>Error:</b> <code>${p.errorMessage}</code>\n\n` +
+             `🕒 <i>${ts}</i>`;
   }
 }
 

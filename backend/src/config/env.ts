@@ -27,10 +27,18 @@ const envSchema = z.object({
   PROXY_PORT: z.coerce.number().optional(),
   PROXY_USERNAME: z.string().optional(),
   PROXY_PASSWORD: z.string().optional(),
+  /** Optional ISO 3166-1 alpha-2 (e.g. AO, PT) for ProxyRack username suffix `-country-XX`. Invalid or empty → ignored. */
+  PROXY_STICKY_GEO: z
+    .string()
+    .optional()
+    .transform((s) => {
+      const t = (s ?? '').trim().toUpperCase();
+      return /^[A-Z]{2}$/.test(t) ? t : undefined;
+    }),
 
-  TELEGRAM_BOT_TOKEN: z.string().optional(),
-  TELEGRAM_CHAT_ID: z.string().optional(),
-  TELEGRAM_PROXY: z.string().optional(),
+  TELEGRAM_BOT_TOKEN: z.string().optional().transform((s) => (s?.trim() ? s.trim() : undefined)),
+  TELEGRAM_CHAT_ID: z.string().optional().transform((s) => (s?.trim() ? s.trim() : undefined)),
+  TELEGRAM_PROXY: z.string().optional().transform((s) => (s?.trim() ? s.trim() : undefined)),
 
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().default(587),
@@ -44,10 +52,13 @@ const envSchema = z.object({
   VAPID_SUBJECT: z.string().default('mailto:admin@example.com'),
 
   BOOKING_CONCURRENCY: z.coerce.number().default(3),
-  MONITOR_DEFAULT_INTERVAL_MS: z.coerce.number().default(10000),
+  /** Default poll interval — 30s is safer for VFS/Cloudflare than aggressive 10s. */
+  MONITOR_DEFAULT_INTERVAL_MS: z.coerce.number().default(30000),
   SESSION_DIR: z.string().default('/app/sessions'),
   BOOKING_MAX_RETRIES: z.coerce.number().default(3),
   PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: z.string().optional(),
+  VFS_COOLDOWN_MS: z.coerce.number().default(300000),
+  TELEGRAM_SHOW_APPLICANT_NAMES: z.string().transform((v) => v === 'true').default('true'),
 });
 
 const parsed = envSchema.safeParse(process.env);

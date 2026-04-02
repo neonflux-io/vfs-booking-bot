@@ -8,6 +8,8 @@ services:
       POSTGRES_USER: vfsuser
       POSTGRES_PASSWORD: vfspass
       POSTGRES_DB: vfsdb
+    ports:
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -23,6 +25,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: redis-server --requirepass redispass --appendonly yes
+    ports:
+      - "6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -40,6 +44,9 @@ services:
     restart: unless-stopped
     shm_size: 1gb
     env_file: .env
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     environment:
       DATABASE_URL: postgresql://vfsuser:vfspass@postgres:5432/vfsdb
       REDIS_URL: redis://:redispass@redis:6379

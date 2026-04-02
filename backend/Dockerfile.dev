@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM mcr.microsoft.com/playwright:v1.44.0-jammy
 
 WORKDIR /app
@@ -5,10 +6,19 @@ WORKDIR /app
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/ms-playwright/chromium-1117/chrome-linux/chrome
 
-COPY package.json ./
+# So `npm install` does not look “stuck” (TTY-less builds are silent by default)
+ENV NPM_CONFIG_LOGLEVEL=info
+ENV NPM_CONFIG_FETCH_RETRIES=5
+ENV NPM_CONFIG_FETCH_TIMEOUT=120000
+ENV NPM_CONFIG_AUDIT=false
+ENV NPM_CONFIG_FUND=false
+
+COPY package.json package-lock.json* ./
 COPY prisma ./prisma/
 
-RUN npm install
+# Cache npm downloads between builds (needs: DOCKER_BUILDKIT=1, default in recent Docker Desktop)
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --no-audit --no-fund
 RUN npx prisma generate
 
 COPY . .

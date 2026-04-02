@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: vfspass
       POSTGRES_DB: vfsdb
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -39,13 +39,18 @@ services:
       DATABASE_URL: postgresql://vfsuser:vfspass@postgres:5432/vfsdb
       REDIS_URL: redis://:redispass@redis:6379
       SESSION_DIR: /app/sessions
+      AGENT_DEBUG_LOG_PATH: /app/debug-98adce.log
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
       - "3001:3001"
     volumes:
       - ./backend/src:/app/src
       - ./backend/prisma:/app/prisma
       - sessions-data:/app/sessions
-    command: sh -c "npx prisma migrate deploy && npm run dev"
+      - ./debug-98adce.log:/app/debug-98adce.log
+    command: sh -c "npx prisma migrate deploy && npx ts-node --transpile-only -r tsconfig-paths/register src/index.ts"
     depends_on:
       postgres:
         condition: service_healthy
