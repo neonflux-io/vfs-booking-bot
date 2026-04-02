@@ -1,0 +1,62 @@
+
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+async function checkProxies() {
+  try {
+    console.log('--- Proxy Status Report ---');
+    const proxies = await prisma.proxy.findMany();
+    if (proxies.length === 0) {
+      console.log('No proxies found in the database.');
+    } else {
+      console.table(proxies.map(p => ({
+        id: p.id.slice(0, 8),
+        host: p.host,
+        port: p.port,
+        status: p.status,
+        blockCount: p.blockCount,
+        lastUsed: p.lastUsedAt?.toISOString() || 'Never',
+        lastBlocked: p.lastBlockedAt?.toISOString() || 'Never'
+      })));
+    }
+
+    console.log('\n--- Recent Proxy Logs (Last 20) ---');
+    const logs = await prisma.log.findMany({
+      where: {
+        OR: [
+          { eventType: 'IP_BLOCKED' },
+          { message: { contains: 'proxy', mode: 'insensitive' } },
+          { message: { contains: 'warm', mode: 'insensitive' } }
+        ]
+      },
+      orderBy: { timestamp: 'desc' },
+      take: 20
+    });
+
+    if (logs.length === 0) {
+      console.log('No relevant logs found.');
+    } else {
+      logs.forEach(log => {
+        const time = new Date(log.timestamp).toLocaleTimeString();
+        console.log(`[${time}] ${log.level} [${log.eventType}]: ${log.message}`);
+      });
+    }
+
+  } catch (error) {
+    console.error('Error checking proxies:', error);
+  } finally {
+    const latestMonitor = await prisma.log.findFirst({
+        where: { eventType: 'MONITOR_STARTED' },
+        orderBy: { timestamp: 'desc' }
+    });
+    if (latestMonitor) {
+        console.log('\n--- Latest Activity ---');
+        console.log(`Latest Monitor Start: ${latestMonitor.timestamp.toISOString()} - ${latestMonitor.message}`);
+    }
+    
+    await prisma.$disconnect();
+  }
+}
+
+checkProxies();

@@ -9,6 +9,17 @@ import { AppError } from '@middleware/errorHandler';
 import { SlotInfo } from '@t/index';
 import { resolveDestinationCode } from '@config/vfs-countries';
 
+/** Helper to block heavy resources (images, fonts, media) to save data/bandwidth */
+async function optimizeDataUsage(page: any) {
+  await page.route('**/*', (route: any) => {
+    const type = route.request().resourceType();
+    if (['image', 'media', 'font'].includes(type)) {
+      return route.abort();
+    }
+    return route.continue();
+  });
+}
+
 const VFS_BASE = 'https://visa.vfsglobal.com';
 const ANGOLA_ORIGIN = 'AGO';
 
@@ -50,6 +61,7 @@ export async function runBookingFlow(
   opts: NavigatorOptions
 ): Promise<string> {
   const page = await context.newPage();
+  await optimizeDataUsage(page);
   const sel = getSelectors();
   let state: NavState = 'START';
 

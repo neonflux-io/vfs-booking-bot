@@ -106,6 +106,17 @@ async function launchBrowser(
 }
 
 /** Verify that the outgoing IP matches the expected country (BH, PK, etc.) using redundant sources. */
+/** Helper to block heavy resources (images, fonts, media) to save data/bandwidth */
+async function optimizeDataUsage(page: any) {
+  await page.route('**/*', (route: any) => {
+    const type = route.request().resourceType();
+    if (['image', 'media', 'font'].includes(type)) {
+      return route.abort();
+    }
+    return route.continue();
+  });
+}
+
 async function checkProxyIntegrity(page: any, expectedISO2: string | null): Promise<boolean> {
   if (!expectedISO2) return false;
 
@@ -251,6 +262,7 @@ async function loginAndNavigate(
   });
 
   const page = await context.newPage();
+  await optimizeDataUsage(page);
   const iso2 = getCountryISO2(sourceCode);
   await injectStealth(page, fingerprint, iso2);
 
@@ -316,6 +328,8 @@ export async function warmSessionWithBrowser(
         userAgent: fingerprint.ua,
         viewport: fingerprint.viewport
     });
+    const page = await context.newPage();
+    await optimizeDataUsage(page);
     const cookies = await context.cookies();
     const cookieHeader = cookies.map(c => `${c.name}=${c.value}`);
     
@@ -351,6 +365,7 @@ export async function fetchSlotsWithBrowser(
         });
 
         const page = await context.newPage();
+        await optimizeDataUsage(page);
         const iso2 = getCountryISO2(sourceCode);
         await injectStealth(page, fingerprint, iso2);
 

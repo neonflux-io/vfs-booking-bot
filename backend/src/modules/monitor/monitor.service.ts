@@ -745,7 +745,7 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
           emitToAll('MONITOR_STATUS', { monitorId: id, status: 'running', isCoolingDown: false });
         }
 
-        setTimeout(poll, 1500); // Retry almost immediately
+        setTimeout(poll, 30_000); // Wait 30s before rotating again to save data
         return;
       }
     }
