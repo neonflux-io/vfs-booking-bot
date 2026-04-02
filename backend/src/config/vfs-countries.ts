@@ -13,6 +13,7 @@
 export interface VfsCountry {
   code: string;   // ISO 3166-1 alpha-3
   label: string;  // Display name
+  iso2?: string;  // ISO 3166-1 alpha-2 (for ProxyRack geo-targeting)
 }
 
 export interface VfsCentre {
@@ -31,91 +32,91 @@ export interface VfsVisaType {
 
 export const SOURCE_COUNTRIES: VfsCountry[] = [
   // Europe
-  { code: 'gbr', label: 'United Kingdom' },
-  { code: 'deu', label: 'Germany' },
-  { code: 'fra', label: 'France' },
-  { code: 'ita', label: 'Italy' },
-  { code: 'esp', label: 'Spain' },
-  { code: 'nld', label: 'Netherlands' },
-  { code: 'bel', label: 'Belgium' },
-  { code: 'che', label: 'Switzerland' },
-  { code: 'aut', label: 'Austria' },
-  { code: 'pol', label: 'Poland' },
-  { code: 'cze', label: 'Czech Republic' },
-  { code: 'swe', label: 'Sweden' },
-  { code: 'nor', label: 'Norway' },
-  { code: 'dnk', label: 'Denmark' },
-  { code: 'fin', label: 'Finland' },
-  { code: 'irl', label: 'Ireland' },
-  { code: 'grc', label: 'Greece' },
-  { code: 'tur', label: 'Turkey' },
-  { code: 'rou', label: 'Romania' },
-  { code: 'hun', label: 'Hungary' },
-  { code: 'hrv', label: 'Croatia' },
-  { code: 'prt', label: 'Portugal' },
-  { code: 'ukr', label: 'Ukraine' },
-  { code: 'srb', label: 'Serbia' },
-  { code: 'rus', label: 'Russia' },
+  { code: 'gbr', label: 'United Kingdom', iso2: 'GB' },
+  { code: 'deu', label: 'Germany', iso2: 'DE' },
+  { code: 'fra', label: 'France', iso2: 'FR' },
+  { code: 'ita', label: 'Italy', iso2: 'IT' },
+  { code: 'esp', label: 'Spain', iso2: 'ES' },
+  { code: 'nld', label: 'Netherlands', iso2: 'NL' },
+  { code: 'bel', label: 'Belgium', iso2: 'BE' },
+  { code: 'che', label: 'Switzerland', iso2: 'CH' },
+  { code: 'aut', label: 'Austria', iso2: 'AT' },
+  { code: 'pol', label: 'Poland', iso2: 'PL' },
+  { code: 'cze', label: 'Czech Republic', iso2: 'CZ' },
+  { code: 'swe', label: 'Sweden', iso2: 'SE' },
+  { code: 'nor', label: 'Norway', iso2: 'NO' },
+  { code: 'dnk', label: 'Denmark', iso2: 'DK' },
+  { code: 'fin', label: 'Finland', iso2: 'FI' },
+  { code: 'irl', label: 'Ireland', iso2: 'IE' },
+  { code: 'grc', label: 'Greece', iso2: 'GR' },
+  { code: 'tur', label: 'Turkey', iso2: 'TR' },
+  { code: 'rou', label: 'Romania', iso2: 'RO' },
+  { code: 'hun', label: 'Hungary', iso2: 'HU' },
+  { code: 'hrv', label: 'Croatia', iso2: 'HR' },
+  { code: 'prt', label: 'Portugal', iso2: 'PT' },
+  { code: 'ukr', label: 'Ukraine', iso2: 'UA' },
+  { code: 'srb', label: 'Serbia', iso2: 'RS' },
+  { code: 'rus', label: 'Russia', iso2: 'RU' },
 
   // Middle East
-  { code: 'are', label: 'United Arab Emirates' },
-  { code: 'sau', label: 'Saudi Arabia' },
-  { code: 'qat', label: 'Qatar' },
-  { code: 'kwt', label: 'Kuwait' },
-  { code: 'bhr', label: 'Bahrain' },
-  { code: 'omn', label: 'Oman' },
-  { code: 'jor', label: 'Jordan' },
-  { code: 'lbn', label: 'Lebanon' },
-  { code: 'irq', label: 'Iraq' },
+  { code: 'are', label: 'United Arab Emirates', iso2: 'AE' },
+  { code: 'sau', label: 'Saudi Arabia', iso2: 'SA' },
+  { code: 'qat', label: 'Qatar', iso2: 'QA' },
+  { code: 'kwt', label: 'Kuwait', iso2: 'KW' },
+  { code: 'bhr', label: 'Bahrain', iso2: 'BH' },
+  { code: 'omn', label: 'Oman', iso2: 'OM' },
+  { code: 'jor', label: 'Jordan', iso2: 'JO' },
+  { code: 'lbn', label: 'Lebanon', iso2: 'LB' },
+  { code: 'irq', label: 'Iraq', iso2: 'IQ' },
 
   // Africa
-  { code: 'ago', label: 'Angola' },
-  { code: 'zaf', label: 'South Africa' },
-  { code: 'nga', label: 'Nigeria' },
-  { code: 'ken', label: 'Kenya' },
-  { code: 'egy', label: 'Egypt' },
-  { code: 'gha', label: 'Ghana' },
-  { code: 'mar', label: 'Morocco' },
-  { code: 'tun', label: 'Tunisia' },
-  { code: 'eth', label: 'Ethiopia' },
-  { code: 'tza', label: 'Tanzania' },
-  { code: 'dza', label: 'Algeria' },
-  { code: 'cmr', label: 'Cameroon' },
-  { code: 'sen', label: 'Senegal' },
+  { code: 'ago', label: 'Angola', iso2: 'AO' },
+  { code: 'zaf', label: 'South Africa', iso2: 'ZA' },
+  { code: 'nga', label: 'Nigeria', iso2: 'NG' },
+  { code: 'ken', label: 'Kenya', iso2: 'KE' },
+  { code: 'egy', label: 'Egypt', iso2: 'EG' },
+  { code: 'gha', label: 'Ghana', iso2: 'GH' },
+  { code: 'mar', label: 'Morocco', iso2: 'MA' },
+  { code: 'tun', label: 'Tunisia', iso2: 'TN' },
+  { code: 'eth', label: 'Ethiopia', iso2: 'ET' },
+  { code: 'tza', label: 'Tanzania', iso2: 'TZ' },
+  { code: 'dza', label: 'Algeria', iso2: 'DZ' },
+  { code: 'cmr', label: 'Cameroon', iso2: 'CM' },
+  { code: 'sen', label: 'Senegal', iso2: 'SN' },
 
   // South Asia
-  { code: 'ind', label: 'India' },
-  { code: 'pak', label: 'Pakistan' },
-  { code: 'bgd', label: 'Bangladesh' },
-  { code: 'lka', label: 'Sri Lanka' },
-  { code: 'npl', label: 'Nepal' },
+  { code: 'ind', label: 'India', iso2: 'IN' },
+  { code: 'pak', label: 'Pakistan', iso2: 'PK' },
+  { code: 'bgd', label: 'Bangladesh', iso2: 'BD' },
+  { code: 'lka', label: 'Sri Lanka', iso2: 'LK' },
+  { code: 'npl', label: 'Nepal', iso2: 'NP' },
 
   // Southeast & East Asia
-  { code: 'phl', label: 'Philippines' },
-  { code: 'tha', label: 'Thailand' },
-  { code: 'idn', label: 'Indonesia' },
-  { code: 'vnm', label: 'Vietnam' },
-  { code: 'mys', label: 'Malaysia' },
-  { code: 'chn', label: 'China' },
-  { code: 'jpn', label: 'Japan' },
-  { code: 'kor', label: 'South Korea' },
-  { code: 'twn', label: 'Taiwan' },
-  { code: 'mmr', label: 'Myanmar' },
-  { code: 'khm', label: 'Cambodia' },
+  { code: 'phl', label: 'Philippines', iso2: 'PH' },
+  { code: 'tha', label: 'Thailand', iso2: 'TH' },
+  { code: 'idn', label: 'Indonesia', iso2: 'ID' },
+  { code: 'vnm', label: 'Vietnam', iso2: 'VN' },
+  { code: 'mys', label: 'Malaysia', iso2: 'MY' },
+  { code: 'chn', label: 'China', iso2: 'CN' },
+  { code: 'jpn', label: 'Japan', iso2: 'JP' },
+  { code: 'kor', label: 'South Korea', iso2: 'KR' },
+  { code: 'twn', label: 'Taiwan', iso2: 'TW' },
+  { code: 'mmr', label: 'Myanmar', iso2: 'MM' },
+  { code: 'khm', label: 'Cambodia', iso2: 'KH' },
 
   // Americas
-  { code: 'usa', label: 'United States' },
-  { code: 'can', label: 'Canada' },
-  { code: 'bra', label: 'Brazil' },
-  { code: 'mex', label: 'Mexico' },
-  { code: 'col', label: 'Colombia' },
-  { code: 'arg', label: 'Argentina' },
-  { code: 'per', label: 'Peru' },
-  { code: 'chl', label: 'Chile' },
+  { code: 'usa', label: 'United States', iso2: 'US' },
+  { code: 'can', label: 'Canada', iso2: 'CA' },
+  { code: 'bra', label: 'Brazil', iso2: 'BR' },
+  { code: 'mex', label: 'Mexico', iso2: 'MX' },
+  { code: 'col', label: 'Colombia', iso2: 'CO' },
+  { code: 'arg', label: 'Argentina', iso2: 'AR' },
+  { code: 'per', label: 'Peru', iso2: 'PE' },
+  { code: 'chl', label: 'Chile', iso2: 'CL' },
 
   // Oceania
-  { code: 'aus', label: 'Australia' },
-  { code: 'nzl', label: 'New Zealand' },
+  { code: 'aus', label: 'Australia', iso2: 'AU' },
+  { code: 'nzl', label: 'New Zealand', iso2: 'NZ' },
 ];
 
 // ─── Destination Countries (Going To) ────────────────────────────────────────
@@ -694,7 +695,13 @@ export function getDestinationCountries(): VfsCountry[] {
 
 /** Get VFS application centres for a source country. */
 export function getCentres(sourceCode: string): VfsCentre[] {
-  return APPLICATION_CENTRES[sourceCode.toLowerCase()] ?? [];
+  const centres = APPLICATION_CENTRES[sourceCode.toLowerCase()] ?? [];
+  if (centres.length === 0) {
+    // 🌍 UNIVERSAL FALLBACK: If no specific cities are known, allow a generic "Main Centre"
+    // This ensures that all 75 source countries remain functional in the frontend.
+    return [{ id: 'main', label: 'Main VFS Centre (Primary)' }];
+  }
+  return centres;
 }
 
 /** Get visa types for a destination country. Falls back to the generic set. */
@@ -743,4 +750,11 @@ export function getCountryLabel(code: string): string {
 export function getCentreLabel(sourceCode: string, centreId: string): string {
   const centres = getCentres(sourceCode);
   return centres.find(c => c.id === centreId)?.label ?? centreId;
+}
+
+/** Get the ISO-2 code for ProxyRack geo-targeting. */
+export function getCountryISO2(code: string): string | null {
+  const lower = code.toLowerCase();
+  const country = SOURCE_COUNTRIES.find(c => c.code === lower);
+  return country?.iso2 ?? null;
 }

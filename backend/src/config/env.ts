@@ -39,6 +39,10 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().optional().transform((s) => (s?.trim() ? s.trim() : undefined)),
   TELEGRAM_CHAT_ID: z.string().optional().transform((s) => (s?.trim() ? s.trim() : undefined)),
   TELEGRAM_PROXY: z.string().optional().transform((s) => (s?.trim() ? s.trim() : undefined)),
+  TELEGRAM_USE_PROXY: z.string().transform((v) => v === 'true').default('false'),
+  TELEGRAM_API_ROOT: z.string().url().optional().transform((s) => (s?.trim() ? s.trim() : undefined)),
+
+
 
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().default(587),

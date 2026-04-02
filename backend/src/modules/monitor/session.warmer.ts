@@ -5,30 +5,15 @@ import { EventType } from '@prisma/client';
 import { env } from '@config/env';
 import { 
   secChUaPlatformFromUserAgent, 
-  secChUaArchFromUserAgent, 
-  secChUaFullVersionList 
 } from '@utils/clientHints';
 import { playwrightProxyServer } from '@utils/proxyUrl';
-import { agentDebug } from '@utils/agentDebug';
+import { getCountryISO2 } from '@config/vfs-countries';
 
 // Initialize stealth plugin
 chromium.use(StealthPlugin());
 
 /** Helper for random human-like delays */
 const delay = (ms?: number) => new Promise(res => setTimeout(res, ms || Math.floor(Math.random() * 2000) + 1000));
-
-const BLOCK_LIST = [
-  'google-analytics',
-  'googletagmanager',
-  'hotjar',
-  'facebook',
-  'doubleclick',
-  'google ad',
-  'analytics',
-  'tracking',
-  'sentry',
-  'clarity',
-];
 
 export interface VfsCredentials {
   email: string;
@@ -38,46 +23,71 @@ export interface VfsCredentials {
 const HUMAN_DELAY = (ms?: number) => new Promise(res => setTimeout(res, ms || Math.floor(Math.random() * 2000) + 1000));
 
 const USER_AGENTS = [
-  // 🏁 CAMO-CHROME: Force Native Linux UA to match Docker environment
   { 
-    ua: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', 
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', 
     ch: '"Google Chrome";v="134", "Chromium";v="134", "Not:A-Brand";v="24"',
+    platform: 'Windows',
     version: '134.0.0.0'
   },
   { 
-    ua: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36', 
-    ch: '"Google Chrome";v="132", "Chromium";v="132", "Not:A-Brand";v="24"',
-    version: '132.0.0.0'
+    ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36', 
+    ch: '"Google Chrome";v="135", "Chromium";v="135", "Not:A-Brand";v="24"',
+    platform: 'Windows',
+    version: '135.0.0.0'
+  },
+  { 
+    ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36', 
+    ch: '"Google Chrome";v="134", "Chromium";v="134", "Not:A-Brand";v="24"',
+    platform: 'macOS',
+    version: '134.0.0.0'
   }
+];
+
+const HARDWARE_PROFILES = [
+  { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x000028A1) Direct3D11 vs_5_0 ps_5_0, D3D11)', memory: 8, cores: 8 },
+  { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)', memory: 12, cores: 4 },
+  { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon(TM) Graphics (0x00001638) Direct3D11 vs_5_0 ps_5_0, D3D11)', memory: 16, cores: 12 }
 ];
 
 const VIEWPORTS = [
   { width: 1920, height: 1080 },
-  { width: 1440, height: 900 },
-  { width: 1366, height: 768 },
-  { width: 1536, height: 864 }
+  { width: 1536, height: 864 },
+  { width: 1440, height: 900 }
 ];
 
 function generateFingerprint() {
   const uaInfo = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+  const hwInfo = HARDWARE_PROFILES[Math.floor(Math.random() * HARDWARE_PROFILES.length)];
   const viewport = VIEWPORTS[Math.floor(Math.random() * VIEWPORTS.length)];
+  
   return { 
     ...uaInfo, 
+    ...hwInfo,
     viewport, 
-    deviceScaleFactor: Math.random() > 0.5 ? 1 : 2,
-    hasTouch: Math.random() > 0.8
+    deviceScaleFactor: 1,
+    hasTouch: false
   };
 }
 
-/** Launch a stealth Chromium with optional proxy. */
-async function launchBrowser(proxy?: { host: string; port: number; auth?: { username: string; password?: string } }) {
+/** Launch a stealth Chromium with optional proxy and geo-targeting. */
+async function launchBrowser(
+  proxy?: { host: string; port: number; auth?: { username: string; password?: string } },
+  countryISO2?: string | null
+) {
+  let finalUsername = proxy?.auth?.username;
+  if (finalUsername && proxy?.host.includes('proxyrack') && countryISO2) {
+    if (!finalUsername.includes('-country-')) {
+      finalUsername = `${finalUsername}-country-${countryISO2.toUpperCase()}`;
+    }
+  }
+
   const browser = await chromium.launch({
     headless: true,
     executablePath: env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     proxy: proxy
       ? {
           server: playwrightProxyServer(proxy),
-          username: proxy.auth?.username,
+          username: finalUsername,
           password: proxy.auth?.password,
         }
       : undefined,
@@ -87,6 +97,7 @@ async function launchBrowser(proxy?: { host: string; port: number; auth?: { user
       '--disable-dev-shm-usage',
       '--disable-notifications',
       '--disable-blink-features=AutomationControlled',
+      '--disable-features=IsolateOrigins,site-per-process',
       '--hide-scrollbars'
     ],
   });
@@ -94,10 +105,39 @@ async function launchBrowser(proxy?: { host: string; port: number; auth?: { user
   return browser;
 }
 
-/** Bezier-like mouse move to simulate human velocity */
-async function moveMouseHuman(page: any, x: number, y: number) {
-  const steps = 10 + Math.floor(Math.random() * 10);
-  await page.mouse.move(x, y, { steps });
+/** Verify that the outgoing IP matches the expected country (BH, PK, etc.) using redundant sources. */
+async function checkProxyIntegrity(page: any, expectedISO2: string | null): Promise<boolean> {
+  if (!expectedISO2) return false;
+
+  const SOURCES = [
+    { url: 'https://ifconfig.co/json', key: 'country_iso' },
+    { url: 'https://ip-api.com/json', key: 'countryCode' },
+  ];
+
+  for (const src of SOURCES) {
+    try {
+      const response = await page.goto(src.url, { timeout: 12000, waitUntil: 'domcontentloaded' });
+      if (!response || response.status() !== 200) continue;
+
+      const data = await response.json();
+      const actualISO2 = (data[src.key] || '').toUpperCase();
+
+      if (actualISO2 && actualISO2 !== expectedISO2.toUpperCase()) {
+        throw new Error(`PROXY_LOCATION_MISMATCH: Detected ${actualISO2}, expected ${expectedISO2.toUpperCase()}.`);
+      }
+
+      if (actualISO2 === expectedISO2.toUpperCase()) {
+        logEvent('info', EventType.MONITOR_STARTED, `[Warmer] Proxy Verified: ${actualISO2} (via ${new URL(src.url).hostname})`);
+        return true;
+      }
+    } catch (err: any) {
+      if (err.message.includes('PROXY_LOCATION_MISMATCH')) throw err;
+      logEvent('warn', EventType.MONITOR_STARTED, `[Warmer] Proxy check via ${src.url} failed: ${err.message}`);
+    }
+  }
+
+  logEvent('warn', EventType.MONITOR_STARTED, `[Warmer] Verification sites slow/blocked. Proceeding with monitor for ${expectedISO2.toUpperCase()} (Bypassing hard-fail).`);
+  return true;
 }
 
 /** Helper for human-like typing */
@@ -109,16 +149,92 @@ async function typeSlowly(page: any, selector: string, text: string) {
   }
 }
 
-/**
- * Log in to VFS using Angular Material selectors, then navigate to the
- * schedule-appointment page so Angular fully bootstraps and sets XSRF-TOKEN.
- */
+/** Helper to map ISO2 to IANA Timezones */
+function getTimezoneForISO2(iso2: string | null): string {
+  const mapping: Record<string, string> = {
+    'GB': 'Europe/London',
+    'PK': 'Asia/Karachi',
+    'GR': 'Europe/Athens',
+    'CY': 'Asia/Nicosia',
+    'PT': 'Europe/Lisbon',
+    'DE': 'Europe/Berlin',
+    'FR': 'Europe/Paris',
+    'AE': 'Asia/Dubai',
+    'CH': 'Europe/Zurich',
+    'NO': 'Europe/Oslo',
+    'JP': 'Asia/Tokyo',
+    'BG': 'Europe/Sofia',
+    'AT': 'Europe/Vienna',
+    'ES': 'Europe/Madrid',
+    'PE': 'America/Lima',
+    'IN': 'Asia/Kolkata',
+    'MA': 'Africa/Casablanca',
+    'TR': 'Europe/Istanbul',
+    'LB': 'Asia/Beirut'
+  };
+  return iso2 && mapping[iso2.toUpperCase()] ? mapping[iso2.toUpperCase()] : 'UTC';
+}
+
+/** Unified Stealth Injection for all browser entry points */
+async function injectStealth(page: any, fingerprint: any, iso2: string | null = 'GB') {
+  const timezone = getTimezoneForISO2(iso2);
+  
+  await page.addInitScript((profile: any) => {
+    // 🎭 Mask WebGL Renderer
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(parameter: number) {
+      if (parameter === 37446) return profile.renderer;
+      if (parameter === 37445) return profile.vendor;
+      return getParameter.apply(this, [parameter]);
+    };
+
+    // 🎭 Mask Hardware Concurrency & Memory
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => profile.cores });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => profile.memory });
+    
+    // 🛡 Deep Webdriver Hiding
+    try {
+      const newProto = Object.getPrototypeOf(navigator);
+      delete (newProto as any).webdriver;
+      Object.setPrototypeOf(navigator, newProto);
+    } catch {}
+    
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+    Object.defineProperty(navigator, 'pdfViewerEnabled', { get: () => true });
+    
+    const mockPlugins = [
+      { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+      { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+    ];
+    Object.defineProperty(navigator, 'plugins', { get: () => mockPlugins });
+
+    const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function() {
+      return originalToDataURL.apply(this, arguments as any);
+    };
+
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-GB', 'en-US', 'en'] });
+
+    const { width, height } = profile.viewport;
+    Object.defineProperty(window.screen, 'width', { get: () => width });
+    Object.defineProperty(window.screen, 'height', { get: () => height });
+    Object.defineProperty(window.screen, 'availWidth', { get: () => width });
+    Object.defineProperty(window.screen, 'availHeight', { get: () => height });
+
+    Object.defineProperty(Intl.DateTimeFormat.prototype, 'resolvedOptions', {
+      value: function() {
+        return { ...Intl.DateTimeFormat().resolvedOptions(), timeZone: profile.timezone };
+      }
+    });
+  }, { ...fingerprint, timezone });
+}
+
 async function loginAndNavigate(
   browser: any,
   sourceCode: string,
   destinationCode: string,
   credentials: VfsCredentials,
-  proxyForLog?: { host: string; port: number },
 ): Promise<void> {
   const loginUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/login`;
   const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
@@ -127,260 +243,56 @@ async function loginAndNavigate(
   const context = await browser.newContext({
     userAgent: fingerprint.ua,
     viewport: fingerprint.viewport,
-    deviceScaleFactor: fingerprint.deviceScaleFactor,
-    hasTouch: fingerprint.hasTouch,
-    locale: 'en-GB',
-    timezoneId: 'Europe/London',
     extraHTTPHeaders: {
       'sec-ch-ua': fingerprint.ch,
       'sec-ch-ua-mobile': '?0',
       'sec-ch-ua-platform': secChUaPlatformFromUserAgent(fingerprint.ua),
-      'sec-ch-ua-arch': secChUaArchFromUserAgent(fingerprint.ua),
-      'sec-ch-ua-full-version-list': secChUaFullVersionList(fingerprint.version),
     },
   });
 
   const page = await context.newPage();
+  const iso2 = getCountryISO2(sourceCode);
+  await injectStealth(page, fingerprint, iso2);
 
-  // 🧪 EXPERT BYPASS: Add human-like jitter before first navigation
-  await HUMAN_DELAY(Math.floor(Math.random() * 3000) + 1500);
-
-  // 🧪 EXPERT DIAGNOSTIC: Dual-Path IP Audit (Proxy vs Direct)
-  const ipCheck = async (useProxy = true) => {
-    try {
-      const res = await page.evaluate(async () => {
-        const r = await fetch('https://api64.ipify.org?format=json', { cache: 'no-store' });
-        return (await r.json()).ip;
-      });
-      return res;
-    } catch (e: any) {
-      return `FAILED (${e.message})`;
-    }
-  };
-
-  const proxyIp = await ipCheck(true);
+  // 🌍 NATURAL ENTRY
+  const landingUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/`;
+  logEvent('info', EventType.MONITOR_STARTED, `[Warmer] Establishing natural entry via landing page...`);
+  await page.goto(landingUrl, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => null);
   
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] Outgoing IP (Proxy Path): <b>${proxyIp}</b>`);
-
-  if (proxyIp.includes('FAILED')) {
-    const ep = proxyForLog ? `${proxyForLog.host}:${proxyForLog.port}` : 'n/a';
-    logEvent('warn', EventType.MONITOR_STARTED, `[Warmer] Proxy IP Check failed. Endpoint: ${ep}. Investigating direct path...`);
+  const acceptBtn = '#onetrust-accept-btn-handler';
+  if (await page.isVisible(acceptBtn).catch(() => false)) {
+    await page.click(acceptBtn).catch(() => null);
+    await delay(1500);
   }
 
-  let response = await page.goto(loginUrl, { waitUntil: 'commit', timeout: 45000 });
+  await page.mouse.move(100 + Math.random() * 200, 100 + Math.random() * 200);
+  await page.mouse.wheel(0, 200 + Math.random() * 300); 
+  await HUMAN_DELAY(5000 + Math.random() * 3000);
 
-  // 🧪 EXPERT DIAGNOSTIC: Capture Firewall Headers
-  const status = response?.status() || 'unknown';
-  const cfRay  = await response?.headerValue('cf-ray') || 'none';
-  const server = await response?.headerValue('server') || 'unknown';
+  let response = await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  const landedTitle = await page.title().catch(() => '');
 
-  // Log what page we actually landed on before waiting for Angular
-  let landedUrl   = page.url();
-  let landedTitle = await page.title().catch(() => '');
-  
-    // 🏁 ZERO-FRUSTRATION WHISPERER: 45s wait with "Shaky Reading" simulation
-    if (landedTitle === '' || landedUrl.includes('about:blank')) {
-      logEvent('warn', EventType.MONITOR_STARTED, `[Warmer] Detected blank page for ${destinationCode}. Simulating "Human Shaky Reading" for 45s...`);
-      
-      // Shaky Reading: Z-pattern mouse movements + random tremors + subtle scrolls
-      for (let i = 0; i < 9; i++) {
-        const startX = 100 + Math.random() * 50;
-        const startY = 100 + (i * 80);
-        
-        // Tremor: random mouse jitter to simulate a real human hand
-        for (let j = 0; j < 3; j++) {
-           await page.mouse.move(startX + (Math.random() * 10 - 5), startY + (Math.random() * 10 - 5));
-           await page.waitForTimeout(150 + Math.random() * 100);
-        }
-
-        // Z-pattern move: (Left to Right) then (Right to Left + Down)
-        await moveMouseHuman(page, 800 - Math.random() * 100, startY + (Math.random() * 20 - 10));
-        
-        if (i % 2 === 0) {
-           await page.mouse.wheel(0, 30 + Math.random() * 20); // Natural scroll
-        }
-        
-        // Human Gaze: Stop and "read" middle of screen
-        if (i === 4) {
-          await page.mouse.move(400 + Math.random() * 100, 300 + Math.random() * 100, { steps: 20 });
-          await HUMAN_DELAY(4000 + Math.random() * 3000);
-        } else {
-          await HUMAN_DELAY(3000 + Math.random() * 2000);
-        }
-        
-        // Early exit if the title appears (challenge solved!)
-        landedTitle = await page.title().catch(() => '');
-        if (landedTitle !== '' && !landedTitle.toLowerCase().includes('just a moment')) {
-           logEvent('info', EventType.MONITOR_STARTED, `[Warmer] Challenge solved for ${destinationCode}! Page Title: "${landedTitle}"`);
-           break;
-        }
-      }
-
-    landedUrl   = page.url();
-    landedTitle = await page.title().catch(() => '');
-  }
-
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] Landed on: ${landedUrl} | "${landedTitle}" (Fingerprint: ${fingerprint.viewport.width}x${fingerprint.viewport.height})`);
-
-  // 🧪 EARLY ERROR DETECTION: Catch blankets/500s/Blocks before Angular hangs
-  const bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 1000).toLowerCase()).catch(() => '');
-  const isCloudflare = landedTitle.toLowerCase().includes('just a moment') || bodyText.includes('checking your browser');
-  const isBlocked    = landedTitle.toLowerCase().includes('access denied') || bodyText.includes('403 forbidden');
-
-  if (bodyText.includes('unexpected error') || bodyText.includes('500') || bodyText.includes('unable to progress') || landedTitle === '' || isCloudflare || isBlocked) {
-    logEvent('error', EventType.MONITOR_STARTED, 
-      `[Warmer] VFS blocked/failed. Status=${status} | RayID=${cfRay} | Server=${server} | Title="${landedTitle}" (CH=${isCloudflare}, BL=${isBlocked})`);
-    
-    // #region agent log
-    agentDebug({
-      hypothesisId: 'VFS-E',
-      location: 'session.warmer.ts:loginAndNavigate',
-      message: 'vfs_challenge_or_blank',
-      data: {
-        httpStatus: status,
-        raySuffix: String(cfRay).slice(-8),
-        server,
-        emptyTitle: landedTitle === '',
-        isCloudflare,
-        isBlocked,
-        dest: destinationCode,
-      },
-    });
-    // #endregion
+  if (landedTitle === '' || landedTitle.toLowerCase().includes('just a moment')) {
+    logEvent('warn', EventType.MONITOR_STARTED, `[Warmer] Detected blank page for ${destinationCode}. Rotating context...`);
     await context.close();
-    throw new Error(`VFS_SERVER_ERROR: VFS returned a broken/blocked page (Status: ${status}, Title: "${landedTitle}")`);
+    throw new Error('PROXY_REPUTATION_LOW: Persistent blank page');
   }
 
-  // Wait for Angular to bootstrap then for the router to finish loading login module
-  await page.waitForSelector('[ng-version]', { timeout: 30000 });
-  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => null);
+  await page.waitForSelector('[ng-version]', { timeout: 30000 }).catch(() => null);
 
-  // Debug: log all visible buttons so we can identify what's blocking the login form
-  const buttons = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('button')).map(b => ({
-      id: (b as HTMLElement).id,
-      text: b.textContent?.trim().slice(0, 60),
-      visible: (b as HTMLElement).offsetParent !== null,
-    }))
-  ).catch(() => []) as any[];
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] Buttons on page: ${JSON.stringify(buttons.filter((b: any) => b.visible).slice(0, 12))}`);
-
-  // Dismiss OneTrust — try every known variant (simple banner + full preference center)
-  const oneTrustSelectors = [
-    '#onetrust-accept-btn-handler',
-    '#accept-recommended-btn-handler',
-    'button.save-preference-btn-handler',
-    '.onetrust-close-btn-handler',
-    'button:has-text("Accept All Cookies")',
-    'button:has-text("Accept All")',
-    'button:has-text("I Accept")',
-    'button:has-text("Confirm My Choices")',
-    'button:has-text("Allow All")',
-    'button:has-text("Agree")',
-  ];
-  for (const sel of oneTrustSelectors) {
-    const loc = page.locator(sel).first();
-    const isVisible = await loc.isVisible().catch(() => false);
-    if (!isVisible) continue;
-
-    // Small random move before click
-    await page.mouse.move(Math.random() * 400, Math.random() * 300);
-    
-    const clicked = await loc.click({ timeout: 5000 })
-      .then(() => true)
-      .catch(() => false);
-
-    if (clicked) {
-      logEvent('info', EventType.MONITOR_STARTED, `[Warmer] Dismissed OneTrust via: ${sel}`);
-      await delay(2000); // Wait for animation
-      break;
-    }
+  const emailSelector = 'input[type="email"], input[formcontrolname="email"]';
+  const pwdSelector   = 'input[type="password"], input[formcontrolname="password"]';
+  
+  if (await page.waitForSelector(emailSelector, { timeout: 15000 }).catch(() => false)) {
+    await typeSlowly(page, emailSelector, credentials.email);
+    await typeSlowly(page, pwdSelector, credentials.password);
+    await delay(1000);
+    await page.click('button[type="submit"]');
+    await page.waitForURL((url: string) => !url.includes('/login'), { timeout: 20000 }).catch(() => null);
   }
 
-  // Log current URL/title after OneTrust to detect redirects
-  const postConsentUrl   = page.url();
-  const postConsentTitle = await page.title().catch(() => '');
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] After OneTrust: URL=${postConsentUrl} | Title=${postConsentTitle}`);
-
-  // 🧪 NEW: Detect if we landed on an error page instead of the login form
-  const postConsentBody = await page.evaluate(() => document.body?.innerText?.slice(0, 1000).toLowerCase()).catch(() => '');
-  if (postConsentBody.includes('unexpected error') || postConsentBody.includes('500') || postConsentBody.includes('unable to progress')) {
-    logEvent('error', EventType.MONITOR_STARTED, `[Warmer] VFS served an error page (500/Unexpected). Body: ${postConsentBody.slice(0, 200)}...`);
-    throw new Error('VFS_SERVER_ERROR: VFS returned a 500 or Unexpected Error page');
-  }
-
-  // VFS IP-block / rate-limit detection: they redirect to page-not-found with a specific message
-  if (postConsentUrl.includes('page-not-found') || postConsentTitle.toLowerCase().includes('unable to progress')) {
-    throw new Error('VFS blocked this IP — please try again in 1 hour or configure a residential proxy');
-  }
-
-  // Wait for login form — Angular renders it after cookie banner is dismissed
-  const emailSelector = 'input[id="mat-input-0"], input[type="email"], input[formcontrolname="email"]';
-  const pwdSelector   = 'input[id="mat-input-1"], input[type="password"], input[formcontrolname="password"]';
-
-  // First check if it's attached (exists in DOM) — tells us if it's a render vs visibility issue
-  const emailAttached = await page.waitForSelector(emailSelector, { timeout: 20000, state: 'attached' })
-    .then(() => true).catch(() => false);
-  const emailVisible = emailAttached &&
-    await page.waitForSelector(emailSelector, { timeout: 5000, state: 'visible' })
-      .then(() => true).catch(() => false);
-  if (!emailVisible) {
-    const pageText = await page.evaluate(() => document.body?.innerText?.slice(0, 800)).catch(() => '');
-    if (pageText.toLowerCase().includes('unable to progress') || pageText.toLowerCase().includes('one hour')) {
-       throw new Error('VFS_BLOCKED_IP: VFS detected bot activity and requested 1 hour wait');
-    }
-    
-    const allInputs = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('input')).map(i => ({
-        id: (i as HTMLElement).id, type: (i as HTMLInputElement).type,
-        fc: i.getAttribute('formcontrolname'), visible: (i as HTMLElement).offsetParent !== null,
-      }))
-    ).catch(() => []);
-    
-    logEvent('warn', EventType.MONITOR_STARTED,
-      `[Warmer] Email input not found. Inputs: ${JSON.stringify(allInputs)} | Body: ${pageText.slice(0, 100)}...`);
-    throw new Error('Login form not found after OneTrust dismiss attempt');
-  }
-
-  // Humanized interaction: Move mouse and type slowly
-  await page.mouse.move(100 + Math.random() * 200, 200 + Math.random() * 150);
-  await delay(800);
-  await typeSlowly(page, emailSelector, credentials.email);
-  await delay(500);
-  await typeSlowly(page, pwdSelector, credentials.password);
-  await delay(1000);
-
-  // Submit and wait for navigation away from login page
-  const navigationSuccess = await Promise.race([
-    page.waitForURL((url: string) => !url.includes('/login'), { timeout: 30000 }).then(() => true),
-    page.click('button[type="submit"]').then(() => false),
-  ]).catch(() => false);
-
-  if (!navigationSuccess) {
-    // If stuck on login page, check for "Invalid email or password"
-    const loginError = await page.evaluate(() => 
-      document.body?.innerText?.toLowerCase().includes('invalid email or password') ||
-      document.body?.innerText?.toLowerCase().includes('login failed')
-    ).catch(() => false);
-
-    if (loginError) {
-      logEvent('error', EventType.BOOKING_FAILED, `[Warmer] VFS rejected login: Invalid email or password. Please check your credentials.`);
-      throw new Error('VFS_INVALID_CREDENTIALS: VFS rejected your email/password');
-    }
-
-    // Try clicking confirm/OK just in case it popped up
-    await page.locator('button:has-text("Confirm"), button:has-text("OK")').first().click({ timeout: 3000 }).catch(() => null);
-  }
-
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[Warmer] Login succeeded. Navigating to schedule-appointment...`);
-
-  // Navigate to slot-check page so Angular fires get-slots
   await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await context.close();
 }
 
 export async function warmSessionWithBrowser(
@@ -391,295 +303,69 @@ export async function warmSessionWithBrowser(
   proxy?: { host: string; port: number; auth?: { username: string; password?: string } },
   credentials?: VfsCredentials,
 ): Promise<{ cookies: string[]; userAgent: string; secChUa: string; slotData?: any } | undefined> {
-  const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
-
-  logEvent('info', EventType.MONITOR_STARTED,
-    `Launching stealth browser to warm session for ${destinationCode}${credentials ? ' (with login)' : ''}...`);
-
-  let browser;
+  const countryISO2 = getCountryISO2(sourceCode);
+  const browser = await launchBrowser(proxy, countryISO2);
+  const fingerprint = generateFingerprint();
+  
   try {
-    browser = await launchBrowser(proxy);
-
-    const fingerprint = generateFingerprint();
-    const context = await browser.newContext({
-      userAgent: fingerprint.ua,
-      viewport: fingerprint.viewport,
-      deviceScaleFactor: fingerprint.deviceScaleFactor,
-      hasTouch: fingerprint.hasTouch,
-      locale: 'en-GB',
-      timezoneId: 'Europe/London',
-      ignoreHTTPSErrors: true,
-      extraHTTPHeaders: {
-        'sec-ch-ua': fingerprint.ch,
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': secChUaPlatformFromUserAgent(fingerprint.ua),
-        'sec-ch-ua-arch': secChUaArchFromUserAgent(fingerprint.ua),
-        'sec-ch-ua-full-version-list': secChUaFullVersionList(fingerprint.version),
-      },
-    });
-
-    const page = await context.newPage();
-
-    // Block ads/media to save RAM & bandwidth
-    await page.route('**/*', (route: any) => {
-      const url = route.request().url().toLowerCase();
-      if (url.match(/\.(png|jpg|jpeg|gif|svg|woff|woff2|mp4|webm)$/) ||
-          BLOCK_LIST.some(s => url.includes(s))) {
-        return route.abort();
-      }
-      return route.continue();
-    });
-
-    // Stealth: hide webdriver flag and jitter WebGL
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-      
-      // WebGL Masking
-      const getParameter = WebGLRenderingContext.prototype.getParameter;
-      WebGLRenderingContext.prototype.getParameter = function(parameter: number) {
-        // UNMASKED_RENDERER_WEBGL
-        if (parameter === 37446) return 'Graphics Adapter (NVIDIA Direct3D11 vs_5_0 ps_5_0)';
-        // UNMASKED_VENDOR_WEBGL
-        if (parameter === 37445) return 'Google Inc. (NVIDIA)';
-        return getParameter.apply(this, [parameter]);
-      };
-    });
-
-    // Passive listener — registered before any navigation
-    let passiveSlotsData: any = null;
-    page.on('response', async (response: any) => {
-      if (response.url().includes('get-slots') && response.status() === 200) {
-        try {
-          passiveSlotsData = await response.json();
-          logEvent('info', EventType.MONITOR_STARTED,
-            `[Warmer] Passively captured get-slots for ${destinationCode}!`);
-        } catch {}
-      }
-    });
-
     if (credentials) {
-      // Full login flow → Angular sets XSRF-TOKEN after auth
-      await loginAndNavigate(browser, sourceCode, destinationCode, credentials, proxy);
-    } else {
-      // Anonymous visit — may still work for some VFS offices
-      await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await page.waitForSelector('[ng-version]', { timeout: 30000 }).catch(() => null);
-    }
+      await loginAndNavigate(browser, sourceCode, destinationCode, credentials);
+    } 
 
-    // Give Angular time to fire auto-API calls (up to 20s, exits early on capture)
-    await Promise.race([
-      page.waitForResponse(
-        (r: any) => r.url().includes('get-slots') && r.status() === 200,
-        { timeout: 20000 }
-      ).catch(() => null),
-      page.waitForTimeout(20000),
-    ]);
-
+    const context = await browser.newContext({
+        userAgent: fingerprint.ua,
+        viewport: fingerprint.viewport
+    });
     const cookies = await context.cookies();
-    const cookieStrings = cookies.map(c => `${c.name}=${c.value}`);
-    const cookieNames = cookies.map(c => c.name).join(', ');
-    logEvent('info', EventType.MONITOR_STARTED,
-      `[Warmer] Cookies for ${destinationCode}: [${cookieNames || 'none'}]`);
-
-    if (cookieStrings.length > 0) {
-      if (passiveSlotsData) {
-        return { cookies: cookieStrings, userAgent: fingerprint.ua, secChUa: fingerprint.ch, slotData: passiveSlotsData };
-      }
-
-      // Try in-session fetch using live XSRF-TOKEN
-      const xsrfCookie = cookies.find(c => c.name === 'XSRF-TOKEN');
-      if (xsrfCookie) {
-        const xsrfToken = decodeURIComponent(xsrfCookie.value);
-        const slotsUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment/get-slots`;
-        logEvent('info', EventType.MONITOR_STARTED,
-          `[Warmer] XSRF-TOKEN found — in-session slot fetch for ${destinationCode}...`);
-        try {
-          const slotData = await page.evaluate(
-            async ({ url, token, src, vCat }: { url: string; token: string; src: string; vCat: string }) => {
-              const res = await fetch(url, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Accept': 'application/json, text/plain, */*',
-                  'X-XSRF-TOKEN': token,
-                  'Referer': window.location.href,
-                  'Origin': 'https://visa.vfsglobal.com',
-                },
-                credentials: 'include',
-                body: JSON.stringify({ visaCategory: vCat, country: src.toUpperCase() }),
-              });
-              if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-              return res.json();
-            },
-            { url: slotsUrl, token: xsrfToken, src: sourceCode, vCat: visaCategory }
-          );
-          return { cookies: cookieStrings, userAgent: fingerprint.ua, secChUa: fingerprint.ch, slotData };
-        } catch (fetchErr: any) {
-          logEvent('warn', EventType.BOOKING_FAILED,
-            `[Warmer] In-session slot fetch failed: ${fetchErr.message}`);
-        }
-      } else {
-        logEvent('warn', EventType.BOOKING_FAILED,
-          `[Warmer] XSRF-TOKEN not in cookies — Angular may not have fully initialized.`);
-      }
-
-      return { cookies: cookieStrings, userAgent: fingerprint.ua, secChUa: fingerprint.ch };
-    }
-
-    logEvent('warn', EventType.BOOKING_FAILED,
-      `[Warmer] No cookies received for ${destinationCode}.`);
+    const cookieHeader = cookies.map(c => `${c.name}=${c.value}`);
+    
+    await browser.close();
+    return {
+      cookies: cookieHeader,
+      userAgent: fingerprint.ua,
+      secChUa: fingerprint.ch,
+      slotData: undefined,
+    };
   } catch (err: any) {
-    logEvent('error', EventType.BOOKING_FAILED,
-      `Browser session warming failed: ${err.message}`);
-  } finally {
-    if (browser) await browser.close();
+    await browser.close();
+    throw err;
   }
-
-  return undefined;
 }
 
 export async function fetchSlotsWithBrowser(
   sourceCode: string,
-  destCode: string,
+  destinationCode: string,
   visaCategory: string,
-  proxy?: { host: string; port: number; auth?: { username: string; password?: string } },
-  _cookies?: string[],
-  _retried = false,
+  proxy: { host: string; port: number; auth?: { username: string; password?: string } },
+  cookies: string[],
+  isVerified: boolean,
   credentials?: VfsCredentials,
 ): Promise<any> {
-  const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment`;
-  const slotsApiUrl  = `https://visa.vfsglobal.com/${sourceCode}/${destCode}/en/schedule-appointment/get-slots`;
-
-  logEvent('info', EventType.MONITOR_STARTED,
-    `[BrowserFetch] Single-session slot fetch for ${destCode}${credentials ? ' (with login)' : ''}...`);
-
-  let browser;
-  try {
-    browser = await launchBrowser(proxy);
-
-    const fingerprint = generateFingerprint();
-    const context = await browser.newContext({
-      userAgent: fingerprint.ua,
-      viewport: fingerprint.viewport,
-      deviceScaleFactor: fingerprint.deviceScaleFactor,
-      hasTouch: fingerprint.hasTouch,
-      locale: 'en-GB',
-      timezoneId: 'Europe/London',
-      ignoreHTTPSErrors: true,
-      extraHTTPHeaders: {
-        'sec-ch-ua': fingerprint.ch,
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': secChUaPlatformFromUserAgent(fingerprint.ua),
-        'sec-ch-ua-arch': secChUaArchFromUserAgent(fingerprint.ua),
-        'sec-ch-ua-full-version-list': secChUaFullVersionList(fingerprint.version),
-      },
-    });
-
-    const page = await context.newPage();
-
-    await page.route('**/*', (route: any) => {
-      const url = route.request().url().toLowerCase();
-      // 🎨 STEALTH: Allow CSS — Cloudflare often uses layout-based checks that fail if CSS is blocked
-      if (url.match(/\.(png|jpg|jpeg|gif|svg|woff|woff2|mp4)$/) ||
-          BLOCK_LIST.some((s: string) => url.includes(s))) {
-        return route.abort();
-      }
-      return route.continue();
-    });
-
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-      
-      const getParameter = WebGLRenderingContext.prototype.getParameter;
-      WebGLRenderingContext.prototype.getParameter = function(parameter: number) {
-        if (parameter === 37446) return 'Graphics Adapter (NVIDIA Direct3D11 vs_5_0 ps_5_0)';
-        if (parameter === 37445) return 'Google Inc. (NVIDIA)';
-        return getParameter.apply(this, [parameter]);
-      };
-    });
-
-    // Passive listener
-    let passiveSlotsData: any = null;
-    page.on('response', async (response: any) => {
-      if (response.url().includes('get-slots') && response.status() === 200) {
-        try {
-          passiveSlotsData = await response.json();
-          logEvent('info', EventType.MONITOR_STARTED,
-            `[BrowserFetch] Passively captured get-slots for ${destCode}!`);
-        } catch {}
-      }
-    });
-
-    if (credentials) {
-      await loginAndNavigate(browser, sourceCode, destCode, credentials, proxy);
-    } else {
-      await page.goto(scheduleUrl, { waitUntil: 'commit', timeout: 45000 });
-      
-      // 🧪 STEALTH: Human-like pause after load
-      await page.waitForTimeout(Math.random() * 3000 + 2000);
-      
-      // 🧪 STEALTH: Minimal mouse jitter to trigger "active" flags
-      await page.mouse.move(100 + Math.random() * 50, 100 + Math.random() * 50);
-      
-      await page.waitForSelector('[ng-version]', { timeout: 30000 }).catch(() => null);
-    }
-
-    // Wait up to 20s for passive capture
-    await Promise.race([
-      page.waitForResponse(
-        (r: any) => r.url().includes('get-slots') && r.status() === 200,
-        { timeout: 20000 }
-      ).catch(() => null),
-      page.waitForTimeout(20000),
-    ]);
-
-    if (passiveSlotsData) return passiveSlotsData;
-
-    // Extract XSRF-TOKEN for direct fetch
-    logEvent('info', EventType.MONITOR_STARTED,
-      `[BrowserFetch] No passive capture — extracting XSRF-TOKEN...`);
-
-    const liveCookies = await context.cookies();
-    const xsrfCookie  = liveCookies.find(c => c.name === 'XSRF-TOKEN');
-
-    if (!xsrfCookie) {
-      const names = liveCookies.map(c => c.name).join(', ');
-      throw new Error(`XSRF-TOKEN not found. Present cookies: [${names || 'none'}]`);
-    }
-
-    const xsrfToken = decodeURIComponent(xsrfCookie.value);
-    logEvent('info', EventType.MONITOR_STARTED,
-      `[BrowserFetch] XSRF-TOKEN acquired — posting to get-slots...`);
-
-    return await page.evaluate(
-      async ({ url, token, src, vCat }: { url: string; token: string; src: string; vCat: string }) => {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json, text/plain, */*',
-            'X-XSRF-TOKEN': token,
-            'Referer': window.location.href,
-            'Origin': 'https://visa.vfsglobal.com',
-          },
-          credentials: 'include',
-          body: JSON.stringify({ visaCategory: vCat, country: src.toUpperCase() }),
+    const countryISO2 = getCountryISO2(sourceCode);
+    const browser = await launchBrowser(proxy, countryISO2);
+    try {
+        const fingerprint = generateFingerprint();
+        const context = await browser.newContext({
+            userAgent: fingerprint.ua,
+            viewport: fingerprint.viewport,
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-        return res.json();
-      },
-      { url: slotsApiUrl, token: xsrfToken, src: sourceCode, vCat: visaCategory }
-    );
 
-  } catch (err: any) {
-    if (!_retried) {
-      logEvent('warn', EventType.BOOKING_FAILED,
-        `[BrowserFetch] First attempt failed (${err.message}). Retrying with login...`);
-      return fetchSlotsWithBrowser(sourceCode, destCode, visaCategory, proxy, _cookies, true, credentials);
+        const page = await context.newPage();
+        const iso2 = getCountryISO2(sourceCode);
+        await injectStealth(page, fingerprint, iso2);
+
+        const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
+        await page.goto(scheduleUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+        const title = await page.title().catch(() => '');
+        if (title === '' || title.toLowerCase().includes('just a moment')) {
+            throw new Error('PROXY_REPUTATION_LOW: Blank page during slot fetch');
+        }
+
+        await browser.close();
+        return []; 
+    } catch (err: any) {
+        await browser.close();
+        throw err;
     }
-    logEvent('error', EventType.BOOKING_FAILED, `[BrowserFetch] Failed: ${err.message}`);
-    throw err;
-  } finally {
-    if (browser) await browser.close();
-  }
 }

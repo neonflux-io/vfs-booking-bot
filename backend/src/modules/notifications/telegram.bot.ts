@@ -54,8 +54,12 @@ export function initTelegramBot(useProxy = true): Telegraf | null {
     useProxy && env.TELEGRAM_PROXY ? telegramOutboundAgent(env.TELEGRAM_PROXY) : undefined;
   
   const newBot = new Telegraf(env.TELEGRAM_BOT_TOKEN, {
-    telegram: { agent: agent as any }
+    telegram: { 
+      agent: agent as any,
+      apiRoot: env.TELEGRAM_API_ROOT || undefined,
+    }
   });
+
 
   // ── Authentication Middleware ──────────────────────────────────────────────
   newBot.use(async (ctx: Context, next: () => Promise<void>) => {
@@ -178,14 +182,15 @@ export async function startTelegramBot() {
 
   try {
     let attempts = 0;
-    const HAS_LOCAL_PROXY = Boolean(env.TELEGRAM_PROXY);
-    let useProxy = HAS_LOCAL_PROXY;
+    // 🛡 FINAL STABILIZATION: Explicitly control proxy usage.
+    // If TELEGRAM_USE_PROXY is false, we NEVER even try the proxy.
+    let useProxy = env.TELEGRAM_USE_PROXY && Boolean(env.TELEGRAM_PROXY);
 
     agentDebug({
       hypothesisId: 'TG-A',
       location: 'telegram.bot.ts:startTelegramBot',
       message: 'launch_loop_start',
-      data: { useProxy, botInitialized: Boolean(bot) },
+      data: { useProxy, botInitialized: Boolean(bot), proxyConfigured: Boolean(env.TELEGRAM_PROXY) },
     });
 
     while (attempts < 500) { 
@@ -198,7 +203,7 @@ export async function startTelegramBot() {
            break; 
         }
 
-        // 🔗 Try to getMe() to verify connection before full launch
+        // 🔗 Verify connection before launch
         await bot.telegram.getMe();
         
         await bot.launch();
@@ -217,25 +222,21 @@ export async function startTelegramBot() {
         
         console.error(`❌ Telegram launch error (${useProxy ? 'Proxy' : 'Direct'}): ${err.message}`);
 
-        // 💉 SMART FALLBACK: If proxy fails 10x, try Direct connection.
-        // Some residential proxies block api.telegram.org by mistake.
-        if (isSocketError && attempts > 10 && useProxy) {
-          console.warn('⚠️ Proxy confirmed to be blocking Telegram. Falling back to Direct Connection...');
+        // 🛡 ATOMIC FALLBACK: If proxy fails ONCE, and it was enabled, swap to Direct immediately.
+        if (useProxy) {
+          console.warn('⚠️ Telegram Proxy failed. Falling back to Atomic Direct Connection now...');
           try { await bot?.stop(); } catch {}
           bot = null;
-          useProxy = false; 
-        } else if (isSocketError && HAS_LOCAL_PROXY && useProxy) {
-          console.warn(`🔄 Proxy networking issue. Retrying with Proxy (Attempt ${attempts}/10)...`);
-          try { await bot?.stop(); } catch {}
-          bot = null; 
+          useProxy = false; // Stay Direct for the rest of the uptime
         }
 
         attempts++;
-        const delay = Math.max(30000, Math.min(10000 * attempts, 60000)); // 30s -> 60s
+        const delay = Math.min(10000 * attempts, 60000); // Faster initial retries (10s -> 60s)
         console.info(`⏳ Retrying Telegram in ${Math.round(delay/1000)}s...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
+
   } catch (globalErr: any) {
     console.error('💣 Fatal Telegram bot loop crash (Isolated):', globalErr.message);
   }

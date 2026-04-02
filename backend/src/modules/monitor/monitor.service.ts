@@ -74,7 +74,13 @@ async function getProxyConfig(id: string) {
     // 💎 Zero-Frustration: Force UK-Only Residential IPs for ProxyRack
     let finalUser = user;
     if (host.includes('proxyrack.net')) {
-      const geo = env.PROXY_STICKY_GEO;
+      // 💎 Dynamic Geo-Targeting: Use the ISO2 code from the monitor's source country
+      // Fallback to env.PROXY_STICKY_GEO if specific country mapping is missing.
+      const currentMonitor = getMonitor(id);
+      const sourceCode = currentMonitor?.config.sourceCountry;
+      const iso2 = sourceCode ? require('@config/vfs-countries').getCountryISO2(sourceCode) : null;
+      const geo = iso2 || env.PROXY_STICKY_GEO;
+      
       const suffix = geo ? `-country-${geo}` : '';
       if (sessionId) {
         finalUser = suffix ? `${user}${suffix};session=${sessionId}` : `${user};session=${sessionId}`;
@@ -144,8 +150,8 @@ async function rotateProxy(id: string) {
   const current = getMonitor(id);
   if (!current) return;
 
-  // 🌀 Generate a new session ID for ProxyRack IP rotation
-  const newSessionId = Math.random().toString(36).substring(2, 10).toUpperCase();
+  // 🌀 High-Entropy Rotation: Force ProxyRack to give a 100% fresh residential node
+  const newSessionId = require('crypto').randomBytes(8).toString('hex').toUpperCase();
 
   // Track the failure of the current proxy in DB
   if (current.config.proxy?.host) {
@@ -404,18 +410,24 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
           `VFS ${status} response body: ${JSON.stringify(err.response.data).slice(0, 500)}`);
       }
 
-      if (status === 403) {
-        logEvent('warn', EventType.BOOKING_FAILED, `Fetch slots blocked (403). Switching to Ultimate Bypass (Browser Fetch)...`);
+      if (status === 401 || status === 403) {
+        logEvent('warn', EventType.BOOKING_FAILED, `Fetch slots blocked or unauthorized (Status: ${status}). Triggering Hot-Swap...`);
+        const currentM = getMonitor(config.id);
+        const vfsCreds = await getVfsCredentials(config.profileIds);
         const proxyConfig = await getProxyConfig(config.id);
-        return await fetchSlotsWithBrowser(
+        
+        // 🔄 Switch to browser-based bypass immediately
+        const slots = await fetchSlotsWithBrowser(
           sourceCode,
           destCode,
           config.visaType,
           proxyConfig as any,
-          monitorState.cookies,
+          currentM?.cookies || [],
           false,
           vfsCreds,
         );
+
+        if (slots) return slots;
       }
       throw err;
     }
@@ -459,33 +471,33 @@ async function fetchAvailableSlots(config: MonitorConfig): Promise<SlotInfo[]> {
   } catch (err: any) {
     const status = err.response?.status;
     const latest = getMonitor(config.id);
-    if (latest) {
-      setMonitor(config.id, { ...latest, lastHttpStatus: status || 500 });
-    }
 
     logEvent('warn', EventType.BOOKING_FAILED,
       `Monitor fetch error for ${config.destination}: ${err.message}${status ? ` (Status: ${status})` : ''}`,
       { destination: config.destination },
     );
 
-    // Pro-Level: Rotate proxy on 403 and retry once
-    if (status === 403) {
-      const data = err.response?.data;
-      const isCaptcha = data?.sitekey || data?.googlekey || (typeof data === 'string' && data.includes('g-recaptcha'));
+    // Ensure connection/timeout errors (no status) do not default to 500
+    if (!status && latest) {
+      setMonitor(config.id, { ...latest, lastHttpStatus: 0 });
+    } else if (latest) {
+      setMonitor(config.id, { ...latest, lastHttpStatus: status });
+    }
 
-      if (isCaptcha && env.CAPTCHA_SOLVER === 'twocaptcha' && env.TWOCAPTCHA_API_KEY) {
-        logEvent('info', EventType.CAPTCHA_REQUIRED, `Captcha challenge detected at ${config.destination}. Solving via 2Captcha...`);
-        try {
-          const siteKey = data?.sitekey || data?.googlekey || '6LfbTS4UAAAAAA_p0X4Z-K_2_O_...'; // Fallback to common VFS key
-          await solveTwoCaptcha(siteKey, url);
-          logEvent('success' as any, EventType.CAPTCHA_SOLVED, `Captcha bypassed successfully.`);
-        } catch (cErr: any) {
-          logEvent('error', EventType.CAPTCHA_REQUIRED, `Automatic captcha bypass failed: ${cErr.message}`);
-        }
-      }
+    const isTimeout = !status && (err.message.includes('timeout') || err.message.includes('page.goto') || err.message.includes('navigation'));
+    const isProxyTunnelError = !status && err.message.includes('TUNNEL');
+    const isProxyAuthError = status === 403 || status === 561;
+    const isProxyNodeError = status === 565;
 
-      logEvent('warn', EventType.IP_BLOCKED, `403 Forbidden. Rotating proxy for ${config.destination}...`);
-      await rotateProxy(config.id);
+    if (isProxyAuthError || isProxyNodeError || isTimeout || isProxyTunnelError) {
+      // 🔄 HOT SWAP: If we got a proxy/timeout issue, rotate immediately.
+      let reason = 'Proxy Blocked';
+      if (isTimeout) reason = 'Timeout';
+      if (isProxyTunnelError) reason = 'Proxy Tunnel Error';
+      if (isProxyNodeError) reason = 'Proxy Node Down (565)';
+      if (status === 561) reason = 'Proxy Auth Error (561)';
+      
+      throw new Error(`PROXY_REPUTATION_LOW: ${reason} during slot fetch for ${config.destination}`);
     }
 
     throw err; 
@@ -608,13 +620,20 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
 
   async function poll() {
     const current = getMonitor(id);
-    if (!current?.isRunning) return;
+    if (!current || !current.isRunning) return;
+
+    // 🔄 NEW: Clear 'lastHttpStatus' on every fresh poll attempt to signal active state (Green UI)
+    if (current.lastHttpStatus !== 0 || current.isCoolingDown) {
+      setMonitor(id, { ...current, lastHttpStatus: 0, isCoolingDown: false, cooldownUntil: null });
+      emitToAll('MONITOR_STATUS', { monitorId: id, status: 'running', isCoolingDown: false });
+    }
 
     let justDetected = false;
 
     try {
-      // Opt 4: coalesce — share one fetch across monitors on the same route
-      const coalesceKey = `${getSourceCode(fullConfig.sourceCountry)}:${getDestinationCode(fullConfig.destination)}:${fullConfig.visaType}`;
+      // Opt 4: coalesce — share one fetch across monitors on the same route + same category
+      const coalesceKey = `${getSourceCode(fullConfig.sourceCountry)}:${getDestinationCode(fullConfig.destination)}:${fullConfig.centre}:${fullConfig.visaType}`;
+
       const cachedPromise = getCachedSlots(coalesceKey);
       const slotsPromise = cachedPromise ?? fetchAvailableSlots(fullConfig);
       if (!cachedPromise) setCachedSlots(coalesceKey, slotsPromise);
@@ -692,10 +711,42 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
         destination: config.destination,
       });
 
-      // 🧪 NEW: If it's a 403 or VFS_SERVER_ERROR, trigger the cooldown immediately
-      if (errMsg.includes('403') || errMsg.includes('VFS_SERVER_ERROR')) {
+      // 🔄 HOT SWAP: Handle GeoIP failures, Dirty IPs, or 403 Forbidden (immediate rotation without cooldown)
+      if (
+        errMsg.includes('PROXY_LOCATION_MISMATCH') || 
+        errMsg.includes('GEO_VERIFICATION_FAILED') || 
+        errMsg.includes('PROXY_REPUTATION_LOW') ||
+        errMsg.includes('PROXY_TCP_ERROR') ||
+        errMsg.includes('net::') ||
+        errMsg.includes('TUNNEL_') ||
+        errMsg.includes('ECONN') ||
+        errMsg.includes('403') ||
+        errMsg.includes('401') ||
+        errMsg.includes('timeout') ||
+        errMsg.includes('page.goto') ||
+        errMsg.includes('navigation') ||
+        errMsg.includes('VFS_SERVER_ERROR') ||
+        errMsg.toLowerCase().includes('just a moment')
+      ) {
+        logEvent('warn', EventType.IP_BLOCKED, `Security/Location issue detected (${errMsg.split(':')[0]}). Rotating proxy now...`);
+        
+        // 🌀 Critical: Flag as Hot-Swap to keep UI status Green
+        const beforeRotate = getMonitor(id);
+        if (beforeRotate) {
+          setMonitor(id, { ...beforeRotate, lastHttpStatus: 0, isCoolingDown: false });
+        }
+
+        await rotateProxy(id);
+        
+        // Reset cooling flags immediately upon swap to ensure Green UI
         const latest = getMonitor(id);
-        if (latest) setMonitor(id, { ...latest, lastHttpStatus: 403 }); // Mark as blocked/error
+        if (latest) {
+          setMonitor(id, { ...latest, lastHttpStatus: 0, isCoolingDown: false, cooldownUntil: null });
+          emitToAll('MONITOR_STATUS', { monitorId: id, status: 'running', isCoolingDown: false });
+        }
+
+        setTimeout(poll, 1500); // Retry almost immediately
+        return;
       }
     }
 
@@ -715,18 +766,18 @@ export function startMonitor(config: Omit<MonitorConfig, 'id'>): string {
       emitToAll('MONITOR_STATUS', { monitorId: id, isCoolingDown: false, status: 'running' });
     }
 
-    // Strictly 300s (5-min) cooldown for 403 Forbidden or Unexpected Server errors
+    // 🚫 ZERO-COOLDOWN POLICY: 403, 401, Timeout & Status 0 are REPUTATION issues, not server crashes.
+    // They should NEVER trigger the 300s sleep.
     const latestState = getMonitor(id);
-    const isErrorOrBlock = latestState?.lastHttpStatus === 403;
+    const isTrueServerCrash = latestState?.lastHttpStatus && latestState.lastHttpStatus >= 500 && latestState.lastHttpStatus <= 599 && latestState.lastHttpStatus !== 403; 
 
-      if (isErrorOrBlock) {
+    if (isTrueServerCrash) {
         nextDelay = env.VFS_COOLDOWN_MS; 
         const cooldownUntil = new Date(Date.now() + nextDelay);
         
-        // 🌀 Expert Rotation: Instantly switch session for ProxyRack or host-switch for pool
         await rotateProxy(id);
 
-        logEvent('info', EventType.MONITOR_STARTED, `403/500 detected for ${config.destination}. Strictly cooling down for ${env.VFS_COOLDOWN_MS / 1000}s`, {
+        logEvent('info', EventType.MONITOR_STARTED, `Server crash (5xx) detected for ${config.destination}. Strictly cooling down for ${env.VFS_COOLDOWN_MS / 1000}s`, {
           destination: config.destination,
         });
 

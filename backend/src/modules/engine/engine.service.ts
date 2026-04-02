@@ -136,6 +136,7 @@ async function runSingleAttempt(
   try {
     const confirmationNo = await runBookingFlow(context, {
       sessionId: `${job.profileId}-tab${tabIndex}`,
+      sourceCountry: job.sourceCountry,
       destination: job.destination,
       centre: job.centre || '',
       visaType: job.visaType,

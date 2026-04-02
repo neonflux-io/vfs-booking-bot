@@ -26,8 +26,9 @@ interface BookingProfile {
 
 interface NavigatorOptions {
   sessionId: string;
-  destination: string;  // ISO 3166-1 alpha-3 (e.g. 'prt', 'deu')
-  centre: string;       // VFS Application Centre ID (e.g. 'london', 'mumbai')
+  sourceCountry?: string; // Origin (e.g. 'GBR', 'AGO')
+  destination: string;    // ISO 3166-1 alpha-3 (e.g. 'prt', 'deu')
+  centre: string;         // VFS Application Centre ID (e.g. 'london', 'mumbai')
   visaType: string;
   slot: SlotInfo;
   profile: BookingProfile;
@@ -55,9 +56,15 @@ export async function runBookingFlow(
   try {
     // ── Navigate to VFS ──────────────────────────────────────────────────────
     state = 'START';
-    await page.goto(`${VFS_BASE}/ago/${opts.destination.toLowerCase()}/en/entry`, {
+    const sourceCode = opts.sourceCountry || 'GBR'; // Fallback to GBR if missing
+    const destCodeUrl = opts.destination.toLowerCase();
+    
+    // Construct dynamic entry URL: https://visa.vfsglobal.com/gbr/prt/en/entry
+    const entryUrl = `${VFS_BASE}/${sourceCode.toLowerCase()}/${destCodeUrl}/en/entry`;
+    
+    await page.goto(entryUrl, {
       waitUntil: 'domcontentloaded',
-      timeout: 30_000,
+      timeout: 45_000,
     });
 
     await humanDelay(1000, 2000);
@@ -78,9 +85,9 @@ export async function runBookingFlow(
     await page.waitForLoadState('domcontentloaded');
     await humanDelay(800, 1500);
 
-    // Select origin country (Angola)
+    // Select origin country
     if (await page.$(sel.countryOfResidenceDropdown)) {
-      await page.selectOption(sel.countryOfResidenceDropdown, ANGOLA_ORIGIN);
+      await page.selectOption(sel.countryOfResidenceDropdown, sourceCode.toUpperCase());
       await humanDelay(300, 700);
     }
 
