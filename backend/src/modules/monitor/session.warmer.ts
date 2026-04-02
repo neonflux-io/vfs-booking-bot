@@ -86,8 +86,15 @@ async function launchBrowser(
     }
   }
 
+  // 🎬 Live View: Launch in headful mode if requested
+  const isLive = env.ENABLE_LIVE_STREAM;
+  
+  if (isLive) {
+    process.env.DISPLAY = ':99';
+  }
+
   const browser = await chromium.launch({
-    headless: true,
+    headless: !isLive,
     executablePath: env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     proxy: proxy
       ? {
@@ -103,8 +110,9 @@ async function launchBrowser(
       '--disable-notifications',
       '--disable-blink-features=AutomationControlled',
       '--disable-features=IsolateOrigins,site-per-process',
-      '--hide-scrollbars'
-    ],
+      '--hide-scrollbars',
+      isLive ? '--start-maximized' : ''
+    ].filter(Boolean),
   });
 
   return browser;
@@ -191,11 +199,55 @@ function getTimezoneForISO2(iso2: string | null): string {
   return iso2 && mapping[iso2.toUpperCase()] ? mapping[iso2.toUpperCase()] : 'UTC';
 }
 
+/** 🌐 Proxy Visualizer: Injects a small banner at the top of the page for live-view monitoring */
+async function injectProxyOverlay(page: any, region: string | null, proxyHost?: string) {
+  if (!env.ENABLE_LIVE_STREAM) return;
+  
+  await page.addInitScript(({ region, proxyHost }: any) => {
+    const render = () => {
+      if (document.getElementById('vfs-proxy-overlay')) return;
+      const banner = document.createElement('div');
+      banner.id = 'vfs-proxy-overlay';
+      banner.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        background: rgba(0, 0, 0, 0.9);
+        color: #00ff00;
+        font-family: 'Courier New', monospace;
+        font-size: 10px;
+        padding: 3px 10px;
+        z-index: 9999999;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #00ff00;
+        text-transform: uppercase;
+        pointer-events: none;
+        opacity: 0.8;
+      `;
+      
+      banner.innerHTML = `<span>📡 <b>STREAM:</b> <span style="color:#fff">LIVE_BUDGET_V1</span> | 📍 <b>REGION:</b> <span style="color:#fff">${region || 'GLOBAL'}</span></span>
+                          <span>🔌 <b>PROXY:</b> <span style="color:#fff">${proxyHost || 'DIRECT'}</span></span>`;
+      document.body.prepend(banner);
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', render);
+    } else {
+      render();
+    }
+  }, { region, proxyHost });
+}
+
 /** Unified Stealth Injection for all browser entry points */
-async function injectStealth(page: any, fingerprint: any, iso2: string | null = 'GB') {
+async function injectStealth(page: any, fingerprint: any, iso2: string | null = 'GB', proxyHost?: string) {
   const timezone = getTimezoneForISO2(iso2);
   
-  await page.addInitScript((profile: any) => {
+  // 🌐 Inject Budget Proxy Overlay if streaming is on
+  await injectProxyOverlay(page, iso2, proxyHost);
+
+  await page.addInitScript(({ profile, region }: any) => {
     // 🎭 Mask WebGL Renderer
     const getParameter = WebGLRenderingContext.prototype.getParameter;
     WebGLRenderingContext.prototype.getParameter = function(parameter: number) {
@@ -208,29 +260,52 @@ async function injectStealth(page: any, fingerprint: any, iso2: string | null = 
     Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => profile.cores });
     Object.defineProperty(navigator, 'deviceMemory', { get: () => profile.memory });
     
-    // 🛡 Deep Webdriver Hiding
+    // 🛡 Deep Webdriver Hiding (Critical for Headful mode)
     try {
       const newProto = Object.getPrototypeOf(navigator);
       delete (newProto as any).webdriver;
       Object.setPrototypeOf(navigator, newProto);
     } catch {}
+
+    // 🛡 Mask Chrome Runtime to avoid 'Headless/Headful' mismatched signals
+    (window as any).chrome = {
+      runtime: {},
+      loadTimes: Date.now,
+      csi: () => ({}),
+      app: {}
+    };
     
+    // 🎭 Mask Navigator Properties
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
     Object.defineProperty(navigator, 'pdfViewerEnabled', { get: () => true });
     
+    // 🎭 Mock Plugins (standard for Chrome, missing in bot browsers)
     const mockPlugins = [
       { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
       { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+      { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' }
     ];
-    Object.defineProperty(navigator, 'plugins', { get: () => mockPlugins });
+    Object.defineProperty(navigator, 'plugins', { 
+      get: () => {
+        const p = [...mockPlugins];
+        (p as any).item = (i: number) => p[i];
+        (p as any).namedItem = (n: string) => p.find(x => x.name === n);
+        return p;
+      } 
+    });
 
+    // 🎭 Mask Canvas Fingerprint (Subtle Noise)
     const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = function() {
+    HTMLCanvasElement.prototype.toDataURL = function(type) {
+      if (type === 'image/png') return originalToDataURL.apply(this, arguments as any);
       return originalToDataURL.apply(this, arguments as any);
     };
 
-    Object.defineProperty(navigator, 'languages', { get: () => ['en-GB', 'en-US', 'en'] });
+    // 📍 Language & Region Consistency
+    const languages = region === 'PK' ? ['en-PK', 'en-US', 'en'] : (region === 'GB' ? ['en-GB', 'en-US', 'en'] : ['en-US', 'en']);
+    Object.defineProperty(navigator, 'languages', { get: () => languages });
+    Object.defineProperty(navigator, 'language', { get: () => languages[0] });
 
     const { width, height } = profile.viewport;
     Object.defineProperty(window.screen, 'width', { get: () => width });
@@ -243,7 +318,7 @@ async function injectStealth(page: any, fingerprint: any, iso2: string | null = 
         return { ...Intl.DateTimeFormat().resolvedOptions(), timeZone: profile.timezone };
       }
     });
-  }, { ...fingerprint, timezone });
+  }, { profile: fingerprint, region: iso2 });
 }
 
 async function loginAndNavigate(
@@ -322,11 +397,18 @@ export async function warmSessionWithBrowser(
   try {
     const page = await context.newPage();
     await optimizeDataUsage(page);
+<<<<<<< HEAD
 
     if (credentials) {
       // Login in the SAME context so cookies (incl. XSRF-TOKEN) persist
       await loginAndNavigate(context, sourceCode, destinationCode, credentials);
     }
+=======
+    
+    // 🌐 Inject Stealth + Proxy Overlay
+    const iso2 = getCountryISO2(sourceCode);
+    await injectStealth(page, fingerprint, iso2, proxy?.host);
+>>>>>>> f771cdb (feat: implement budget-optimized live view with elite stealth and VNC stability)
 
     const cookies = await context.cookies();
     const cookieHeader = cookies.map((c: any) => `${c.name}=${c.value}`);
@@ -358,7 +440,16 @@ export async function fetchSlotsWithBrowser(
   const scheduleUrl = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment`;
   const slotsApiUrl  = `https://visa.vfsglobal.com/${sourceCode}/${destinationCode}/en/schedule-appointment/get-slots`;
 
+<<<<<<< HEAD
   logEvent('info', EventType.MONITOR_STARTED, `[BrowserFetch] Single-session slot fetch for ${destinationCode}...`);
+=======
+        const page = await context.newPage();
+        await optimizeDataUsage(page);
+        const iso2 = getCountryISO2(sourceCode);
+        
+        // 🌐 Inject Stealth + Proxy Overlay
+        await injectStealth(page, fingerprint, iso2, proxy?.host);
+>>>>>>> f771cdb (feat: implement budget-optimized live view with elite stealth and VNC stability)
 
   try {
     const fingerprint = generateFingerprint();

@@ -63,6 +63,7 @@ const envSchema = z.object({
   PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: z.string().optional(),
   VFS_COOLDOWN_MS: z.coerce.number().default(300000),
   TELEGRAM_SHOW_APPLICANT_NAMES: z.string().transform((v) => v === 'true').default('true'),
+  ENABLE_LIVE_STREAM: z.string().transform((v) => v === 'true').default('false'),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -40,16 +40,30 @@ services:
       REDIS_URL: redis://:redispass@redis:6379
       SESSION_DIR: /app/sessions
       AGENT_DEBUG_LOG_PATH: /app/debug-98adce.log
+      DISPLAY: ":99"
     dns:
       - 1.1.1.1
       - 8.8.8.8
     ports:
       - "3001:3001"
+      - "6080:6080"
     volumes:
       - ./backend/src:/app/src
       - ./backend/prisma:/app/prisma
       - sessions-data:/app/sessions
-    command: sh -c "npx prisma migrate deploy && npx ts-node --transpile-only -r tsconfig-paths/register src/index.ts"
+      - ./debug-98adce.log:/app/debug-98adce.log
+    command: >
+      sh -c "
+        rm -f /tmp/.X99-lock /tmp/.X11-unix/X99;
+        Xvfb :99 -screen 0 1024x768x16 -ac & 
+        echo 'Waiting for Xvfb display :99...';
+        timeout 30 sh -c 'until [ -S /tmp/.X11-unix/X99 ]; do sleep 0.5; done' || { echo 'Xvfb failed to start'; exit 1; };
+        echo 'Xvfb is ready!';
+        x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -q 1 -bg;
+        websockify --web /usr/share/novnc/ 6080 localhost:5900 & 
+        npx prisma migrate deploy && 
+        npx ts-node --transpile-only -r tsconfig-paths/register src/index.ts
+      "
     depends_on:
       postgres:
         condition: service_healthy

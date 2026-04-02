@@ -1,18 +1,30 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useRef } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { useMonitorStore } from '@/store/monitorStore';
 import { cn } from '@/lib/utils';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { MetricCard } from '@/components/dashboard/MetricCard';
-import { Activity, Zap, CheckCircle, Shield, Radio, Terminal, Server, Globe, ExternalLink, X } from 'lucide-react';
+import { Activity, Zap, CheckCircle, Shield, Radio, Terminal, Server, Globe, ExternalLink, X, Monitor, Eye, EyeOff, AlertTriangle, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function DashboardPage() {
   const { liveLogFeed, monitors, manualOverride, setManualOverride, botPageState } = useMonitorStore();
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const [showLiveStream, setShowLiveStream] = useState(false);
+
+  // 🛡️ Data Guard: Auto-shutoff the stream after 5 minutes to save ProxyRack balance
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (showLiveStream) {
+      timer = setTimeout(() => {
+        setShowLiveStream(false);
+      }, 5 * 60 * 1000); // 5 minutes
+    }
+    return () => clearTimeout(timer);
+  }, [showLiveStream]);
 
   const { data: bookingData } = useQuery({
     queryKey: ['booking-history'],
@@ -85,20 +97,80 @@ export default function DashboardPage() {
         )}
 
         {/* System Health Indicators */}
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20 text-[10px] font-bold text-green-500 uppercase tracking-widest">
-            <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-            Engine Online
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20 text-[10px] font-bold text-green-500 uppercase tracking-widest">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+              Engine Online
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-[10px] font-bold text-blue-500 uppercase tracking-widest">
+              <Radio className="w-3 h-3" />
+              Live Stream Ready
+            </div>
           </div>
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-[10px] font-bold text-blue-500 uppercase tracking-widest">
-            <Radio className="w-3 h-3" />
-            Live Stream Connected
-          </div>
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-500/10 border border-purple-500/20 text-[10px] font-bold text-purple-500 uppercase tracking-widest">
-            <Shield className="w-3 h-3" />
-            AES-256 Encrypted
-          </div>
+
+          <button 
+            onClick={() => setShowLiveStream(!showLiveStream)}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all shadow-lg",
+              showLiveStream 
+                ? "bg-red-500/10 border border-red-500/50 text-red-500 hover:bg-red-500/20" 
+                : "bg-primary/10 border border-primary/50 text-primary hover:bg-primary/20 shadow-primary/20"
+            )}
+          >
+            {showLiveStream ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+            {showLiveStream ? 'Kill Stream (Save Data)' : 'Watch Live Automation'}
+          </button>
         </div>
+
+        {/* Live Stream Observer Card */}
+        <AnimatePresence>
+          {showLiveStream && (
+            <motion.div 
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden"
+            >
+              <div className="card bg-zinc-950 border-primary/30 shadow-[0_0_50px_rgba(var(--primary-rgb),0.1)] p-1">
+                <div className="p-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50">
+                   <div className="flex items-center gap-3">
+                    <div className="p-1.5 bg-primary/10 rounded-lg text-primary">
+                      <Monitor className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold tracking-tight text-zinc-100 italic font-mono uppercase underline decoration-primary/30">BUDGET_STREAM_v2.0</h3>
+                      <p className="text-[9px] text-zinc-500 uppercase font-mono flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                        Resolution: 1024x768 @ 0.5 FPS
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-4 px-3 py-1 bg-yellow-500/5 border border-yellow-500/20 rounded text-[9px] text-yellow-100 font-bold uppercase tracking-tighter">
+                      <AlertTriangle className="w-3 h-3 shrink-0 text-yellow-500" />
+                      $19 Plan Safety: Auto-Disconnect in 5m
+                    </div>
+                  </div>
+                </div>
+                <div className="relative aspect-video bg-black w-full overflow-hidden rounded-b-lg group border-t border-zinc-800">
+                  <iframe 
+                    src={`${window.location.protocol}//${window.location.hostname}:6080/vnc.html?autoconnect=true&resize=scale&quality=1&compression=9`} 
+                    className="absolute inset-0 w-full h-full border-0 brightness-110 contrast-125"
+                    title="Live Browser Stream"
+                  />
+                  <div className="absolute top-4 left-4 p-2 bg-black/80 backdrop-blur-md rounded border border-primary/20 text-[9px] text-primary/70 uppercase font-mono pointer-events-none">
+                    Security Overlay Active: Interactive Mouse Enabled
+                  </div>
+                  <div className="absolute bottom-4 right-4 flex items-center gap-2 p-2 bg-zinc-900/90 rounded border border-zinc-800 text-[9px] text-zinc-400 font-mono italic">
+                    <Clock className="w-3 h-3" />
+                    System will auto-kill stream to save ProxyRack balance
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Core Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
